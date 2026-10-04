@@ -20,8 +20,12 @@ SAFETY (enforced in code, see SafetyPolicy and the finally-blocks):
     killed, 'hw_acceptance.py --restore-snapshot' restores from that file.
   * Writes touch CH1 only (--channel to change); the track/sense experiments
     necessarily touch CH2/CH3 and run only while their outputs are off.
-  * Output-on experiment: only with --allow-output AND --confirm-no-load, CH1
-    only, 1.0 V / 0.1 A, always followed by output off and snapshot restore.
+  * Output-on experiments (30 settling curve, 31 OFF-delay semantics): only with
+    --allow-output AND --confirm-no-load, CH1 only, 1.0 V / 0.1 A, always followed
+    by output off (delay forced to 0 first) and snapshot restore.
+  * Experiments 15 (coupled-mode setpoint writes) and 21 (plug write smoke) refuse
+    to run unless all four outputs read 0; --i-know-outputs-are-on does not
+    override that. Restore and the final check cover CH1-CH4.
   * Never sent, enforced by an allow/deny check on every string: *RST,
     DEFault:RESET, FACTory:RESET, anything under LAN, DHCP, GPIB, STORage,
     CALibrate, WAVE, LIST; any write whose header is not on a short allow list.
@@ -36,7 +40,7 @@ is installed. Without the package the tool talks to pyvisa directly.
   python3 tools/hw_acceptance.py --dry-run                 # plan, no connection
   python3 tools/hw_acceptance.py --read-only               # first, safest pass
   python3 tools/hw_acceptance.py                           # + CH1 write experiments
-  python3 tools/hw_acceptance.py --allow-output --confirm-no-load
+  python3 tools/hw_acceptance.py --only 30,31 --allow-output --confirm-no-load
 """
 
 from __future__ import annotations
@@ -90,6 +94,9 @@ Q_TITLES = {
     17: 'STORAGE',
     18: '*RST',
     19: 'Programming examples',
+    20: 'Channel addressing with optional nodes',
+    21: 'Series/parallel setpoint meaning (write side)',
+    22: 'Output OFF delay semantics',
 }
 STATIC_COVERAGE = {
     2: 'needs USB (this tool uses the LAN socket)',
@@ -233,7 +240,8 @@ class Txn:
         if self.kind == 'LATE':
             return ' LATE bytes after a miss: %r' % self.raw
         if self.error:
-            return ' Q  %-40r -> %s  %7.1f ms' % (self.cmd, self.error, self.ms)
+            got = ('  (bytes received before the failure: %r)' % self.raw) if self.raw else ''
+            return ' Q  %-40r -> %s%s  %7.1f ms' % (self.cmd, self.error, got, self.ms)
         return ' Q  %-40r -> %-34r %7.1f ms' % (self.cmd, self.raw, self.ms)
 
 
@@ -303,8 +311,15 @@ class Link:
         self._add('W', cmd, None, (time.perf_counter() - t0) * 1000)
 
     def query(self, cmd: str, timeout_ms: int | None = None) -> str:
+        """Send one command line and read exactly ONE reply line.
+
+        The instrument answers a line that holds several queries with ONE line, the
+        replies concatenated without a separator (acceptance run 1, `*IDN?;*OPC?`),
+        so the number of `?` in the line says nothing about the number of reply lines.
+        Whatever was received before a failure is kept in the transcript.
+        """
         self.policy.check(cmd)
-        n_lines = sum(1 for s in cmd.split(';') if '?' in s.split()[0]) or 1
+        n_queries = sum(1 for s in cmd.split(';') if '?' in s.split()[0])
         old = None
         if timeout_ms is not None:
             old = self._res.timeout
@@ -315,8 +330,7 @@ class Link:
         try:
             if hasattr(self._res, 'read_raw'):
                 self._res.write(cmd)
-                for _ in range(n_lines):
-                    raw += bytes(self._res.read_raw())
+                raw += bytes(self._res.read_raw())
             else:  # fakes without read_raw: reply text only, terminator is synthetic
                 raw = (str(self._res.query(cmd)) + '\n').encode('ascii', 'replace')
         except Exception as exc:
@@ -326,10 +340,12 @@ class Link:
                 self._res.timeout = old
         ms = (time.perf_counter() - t0) * 1000
         if err is not None:
-            self._add('Q', cmd, None, ms, '%s: %s' % (type(err).__name__, err))
+            self._add('Q', cmd, raw or None, ms, '%s: %s' % (type(err).__name__, err))
             self.drain()
             raise QueryFailed(cmd, err, is_timeout(err))
         self._add('Q', cmd, raw, ms)
+        if n_queries > 1:  # a second reply line would put the stream out of step: log it
+            self.drain(quiet_ms=100)
         return raw.decode('ascii', 'replace').rstrip('\r\n')
 
     def drain(self, quiet_ms: int = 150) -> bytes:
@@ -397,11 +413,24 @@ class DryResource:
             try:
                 val = (
                     '%.6f' % float(val)
-                    if key not in ('OUTP', 'OUTP:STAT', 'OCP:STAT', 'LOCK', 'OUTP:TRAC', 'MODE')
+                    if key
+                    not in (
+                        'OUTP',
+                        'OUTP:STAT',
+                        'OUTP:ALL',
+                        'OCP:STAT',
+                        'LOCK',
+                        'LOCK:STAT',
+                        'OUTP:TRAC',
+                        'MODE',
+                    )
                     else val
                 )
             except ValueError:
                 pass
+            if key == 'OUTP:ALL' and val == '0':  # all four outputs off
+                for n in '1234':
+                    self.state['OUTP|CH' + n] = '0'
             self.state[key + '|' + ch] = val
 
     def query(self, cmd: str) -> str:
@@ -598,6 +627,15 @@ class Ctx:
                 'output of CH%s is on or unreadable; refusing to write' % ','.join(map(str, bad))
             )
 
+    def strict_outputs_off(self, channels: tuple[int, ...] = (1, 2, 3, 4)) -> None:
+        """Like require_outputs_off, but --i-know-outputs-are-on does not override it."""
+        bad = self.outputs_on(channels)
+        if bad:
+            raise Skip(
+                'output of CH%s is on or unreadable; this experiment never runs with an output on'
+                % ','.join(map(str, bad))
+            )
+
     def require_independent(self) -> None:
         if self.ch in (2, 3):
             t = self.q('OUTPut:TRACK?')
@@ -725,9 +763,19 @@ def build_restore_items(snap: dict[str, Any], channels: list[int]) -> list[Resto
     return items
 
 
-def restore_snapshot(c: Ctx, snap: dict[str, Any], channels: list[int]) -> list[RestoreItem]:
-    """Read each value; write the snapshot value only where it differs; read back. Up to 3 passes."""
+def restore_snapshot(
+    c: Ctx,
+    snap: dict[str, Any],
+    channels: list[int],
+    include: Callable[[RestoreItem], bool] | None = None,
+) -> list[RestoreItem]:
+    """Read each value; write the snapshot value only where it differs; read back. Up to 3 passes.
+
+    `include` restricts the items (used by experiments that restore only part of the state).
+    """
     items = build_restore_items(snap, channels)
+    if include is not None:
+        items = [i for i in items if include(i)]
     for it in items:
         if it.orig is None:
             it.status = 'skipped'
@@ -1358,23 +1406,83 @@ def exp_ocp_state_delay(c: Ctx) -> None:
     c.finding(4, 'OCP:DELay read-back of 1.2345 -> %s' % res.get('1.2345 s (resolution)'))
 
 
-@experiment(15, 'track', WRITE, (10, 13, 14))
+def _read_coupled(c: Ctx) -> dict[str, str | None]:
+    """CH2 and CH3 voltage, current, OVP, OCP in the manual's verbatim query forms."""
+    out: dict[str, str | None] = {}
+    for n in (2, 3):
+        out['CH%d V' % n] = c.q(':SOURce:VOLTage:SET? CH%d' % n)
+        out['CH%d I' % n] = c.q(':SOURce:CURRent:SET? CH%d' % n)
+        out['CH%d OVP' % n] = c.q(':SOURce:OVP? CH%d' % n)
+        if not c.no_ocp:
+            out['CH%d OCP' % n] = c.q(':SOURce:OCP? CH%d' % n)
+    return out
+
+
+def _fmt_state(state: dict[str, str | None]) -> str:
+    return ' '.join('%s=%s' % kv for kv in state.items())
+
+
+def _coupled_write_test(
+    c: Ctx, mode: str, kind: str, value: str, prot: str, per_half_hint: str
+) -> None:
+    """Write a setpoint on CH2 while coupled (outputs off), read CH2 and CH3, MAXimum, OVP/OCP MAXimum.
+
+    `kind` is VOLTage (SERIES) or CURRent (PARALLEL); `prot` is OVP or OCP. Answers the
+    write side of open question 21 without switching anything on.
+    """
+    letter = 'V' if kind == 'VOLTage' else 'I'
+    track = c.setq('OUTPut:TRACK %s' % mode, 'OUTPut:TRACK?')
+    start = _read_coupled(c)
+    c.note('%s: track reads %r; before the writes: %s' % (mode, track, _fmt_state(start)))
+    c.w(':SOURce:%s:SET CH2,%s' % (kind, value))
+    r2 = c.q(':SOURce:%s:SET? CH2' % kind)
+    r3 = c.q(':SOURce:%s:SET? CH3' % kind)
+    c.w(':SOURce:%s:SET CH2,MAXimum' % kind)
+    m2 = c.q(':SOURce:%s:SET? CH2' % kind)
+    m3 = c.q(':SOURce:%s:SET? CH3' % kind)
+    p2 = p3 = None
+    if prot == 'OVP' or not c.no_ocp:
+        c.w(':SOURce:%s CH2,MAXimum' % prot)
+        p2 = c.q(':SOURce:%s? CH2' % prot)
+        p3 = c.q(':SOURce:%s? CH3' % prot)
+    end = _read_coupled(c)
+    c.note('%s: after the writes: %s' % (mode, _fmt_state(end)))
+    want, got = fnum(value), fnum(r2)
+    if close_to(got, want, 5e-3):
+        verdict = 'COMBINED: CH2 reads back the %s written (%s)' % (letter, value)
+    elif got is not None and want is not None and close_to(got, 2 * want, 5e-3):
+        verdict = 'PER HALF: CH2 reads back twice the %s written (%s)' % (letter, per_half_hint)
+    else:
+        verdict = 'UNCLEAR: read-back %r after writing %s (clamped or other rule)' % (r2, value)
+    c.finding(
+        21,
+        '%s `%s CH2,%s`: CH2 reads %r, CH3 reads %r -> %s. `CH2,MAXimum`: CH2 %r, CH3 %r. '
+        '`%s CH2,MAXimum`: `%s? CH2` %r, `%s? CH3` %r'
+        % (mode, kind, value, r2, r3, verdict, m2, m3, prot, prot, p2, prot, p3),
+    )
+
+
+@experiment(15, 'track', WRITE, (10, 13, 14, 21))
 def exp_track(c: Ctx) -> None:
-    """OUTPut:TRACK: words vs numbers, what the query returns, side effects on CH2/CH3.
+    """OUTPut:TRACK: words vs numbers, what the query returns, side effects, setpoint writes while coupled.
 
     Open question 13 (`OUTPut:TRACK` mapping: 1 = series? 2 = parallel? query
     returns number or word), 10 (OVP/OCP re-initialised when switching
-    series/parallel) and 14 (MAX voltage/current in series/parallel versus the
-    rated table). Runs only while CH2 and CH3 outputs are off; restores the
-    original mode with read-back.
+    series/parallel), 14 (MAX voltage/current in series/parallel versus the
+    rated table) and 21 (write side: is `VOLTage CH2,20` in SERIES the combined
+    value or per half; same for `CURRent` in PARALLEL; `MAXimum` and OVP/OCP in
+    both modes). Runs only while ALL outputs are off (enforced, the
+    --i-know-outputs-are-on override does not apply); restores the CH2 and CH3
+    setpoints, OVP and OCP from the snapshot and the original mode, with read-back.
     """
-    c.require_outputs_off((2, 3))
+    c.strict_outputs_off()
     orig = c.q('OUTPut:TRACK?')
     if orig is None:
         raise Skip('OUTPut:TRACK? gave no answer')
     c.note('original track mode: %r' % orig)
     mapping: dict[str, str | None] = {}
     side: list[str] = []
+    num: dict[str, str | None] = {}
     try:
         for word in ('SERIES', 'PARALLEL', 'INDEPENDENT'):
             r = c.setq('OUTPut:TRACK %s' % word, 'OUTPut:TRACK?')
@@ -1394,10 +1502,38 @@ def exp_track(c: Ctx) -> None:
                     )
                 )
             side.append('after %s (reads %r): %s' % (word, r, ' | '.join(parts)))
-        num: dict[str, str | None] = {}
         for k in ('1', '2', '0'):
             num[k] = c.setq('OUTPut:TRACK %s' % k, 'OUTPut:TRACK?')
+        # --- write side of question 21 (outputs off, nothing is switched on) ---
+        if str(orig).strip().upper() in ('0', 'INDEPENDENT'):
+            _coupled_write_test(c, 'SERIES', 'VOLTage', '20', 'OVP', '40 V combined from 2 x 20 V')
+            _coupled_write_test(c, 'PARALLEL', 'CURRent', '5', 'OCP', '10 A combined from 2 x 5 A')
+        else:
+            c.note(
+                'write side of question 21 NOT tested: original track mode is %r, not INDEPENDENT'
+                % orig
+            )
     finally:
+        try:
+            c.w('OUTPut:TRACK INDEPENDENT')
+            c.note('track back to INDEPENDENT, reads %r' % c.q('OUTPut:TRACK?'))
+            if c.snapshot and str(orig).strip().upper() in ('0', 'INDEPENDENT'):
+                items = restore_snapshot(
+                    c,
+                    c.snapshot,
+                    [2, 3],
+                    include=lambda i: (
+                        i.name.split()[-1] in ('voltage', 'current', 'ovp', 'ocp')
+                        and i.name.startswith(('CH2', 'CH3'))
+                    ),
+                )
+                bad = [i for i in items if i.status == 'FAILED']
+                c.note(
+                    'local restore of CH2/CH3 setpoints, OVP, OCP: %d items, FAILED: %s'
+                    % (len(items), [(i.name, i.orig, i.now) for i in bad] or 'none')
+                )
+        except Exception as exc:  # pragma: no cover - the global restore reports it again
+            c.note('local CH2/CH3 restore failed: %s' % exc)
         try:
             c.w('OUTPut:TRACK %s' % orig)
             back = c.q('OUTPut:TRACK?')
@@ -1513,12 +1649,40 @@ def exp_opc_wai(c: Ctx) -> None:
     c.note('voltage after the chains: %r' % c.q('VOLTage? CH%d' % n))
 
 
+def _all_vi(c: Ctx) -> dict[int, tuple[str | None, str | None]]:
+    """Voltage and current setpoint of all four channels (verbatim query forms)."""
+    return {
+        n: (c.q(':SOURce:VOLTage:SET? CH%d' % n), c.q(':SOURce:CURRent:SET? CH%d' % n))
+        for n in (1, 2, 3, 4)
+    }
+
+
+def _vi_diff(
+    before: dict[int, tuple[str | None, str | None]],
+    after: dict[int, tuple[str | None, str | None]],
+) -> list[str]:
+    out = []
+    for n in (1, 2, 3, 4):
+        for label, b, a in (('V', before[n][0], after[n][0]), ('I', before[n][1], after[n][1])):
+            if not (b is not None and a is not None and values_match(b, a)):
+                out.append('CH%d %s %r -> %r' % (n, label, b, a))
+    return out
+
+
+def _esr_bits(text: str | None) -> str:
+    v = fnum(text)
+    return 'no answer' if v is None else '%s (bit 5 %s)' % (text, 'set' if int(v) & 32 else 'clear')
+
+
 @experiment(19, 'error_reporting', WRITE, (6, 8))
 def exp_errors(c: Ctx) -> None:
-    """What *ESR?/*STB? show after deliberately invalid commands.
+    """What *ESR?/*STB? show after deliberately invalid commands; where an invalid-channel write lands.
 
     Open question 6 (Errors: how are errors reported, which bits of `*ESR?` and
-    `*STB?`) and 8 (Channel argument: what happens with `CH5`). Output off;
+    `*STB?`; hypothesis: `*ESR?` bit 5 is raised only when an error enters an
+    EMPTY error list, which only `*CLS` empties) and 8 (Channel argument: what
+    happens with `CH5` and `CH0`; all four channels' voltage and current are read
+    before and after every invalid-channel write, CH4 included). Output off;
     `*CLS` is sent first so the registers start clean.
     """
     c.require_outputs_off()
@@ -1527,8 +1691,20 @@ def exp_errors(c: Ctx) -> None:
     vr = c.rating[0] if c.rating else None
     c.w('*CLS')
     base = (c.q('*ESR?'), c.q('*STB?'))
-    c.w('VOLTage CH5,1')
-    after_ch5 = (c.q('*ESR?'), c.q('*STB?'))
+    invalid: list[tuple[str, tuple[str | None, str | None], list[str]]] = []
+    for bad_cmd in ('VOLTage CH5,1', 'VOLTage CH0,1'):
+        c.w('*CLS')
+        vi_before = _all_vi(c)
+        c.w(bad_cmd)
+        regs = (c.q('*ESR?'), c.q('*STB?'))
+        diff = _vi_diff(vi_before, _all_vi(c))
+        invalid.append((bad_cmd, regs, diff))
+        c.finding(
+            8,
+            '`%s`: (*ESR?, *STB?) %r; setpoints of CH1-CH4 changed: %s'
+            % (bad_cmd, regs, diff or 'no, all four channels unchanged'),
+        )
+    after_ch5 = invalid[0][1]
     c.w('*CLS')
     ok_before = (c.q('*ESR?'), c.q('*STB?'))
     c.w('VOLTage CH%d,abc' % n)
@@ -1543,13 +1719,14 @@ def exp_errors(c: Ctx) -> None:
     after_unknown = (c.q('*ESR?'), c.q('*STB?'))
     c.finding(
         6,
-        '(*ESR?, *STB?) after *CLS: %r; after `VOLTage CH5,1`: %r; after `VOLTage CHn,abc`: %r; after value 125%% of rating: %r; after unknown query `FOOBar?`: %r'
-        % (base, after_ch5, after_arg, after_over, after_unknown),
+        '(*ESR?, *STB?) after *CLS: %r; after `VOLTage CH5,1`: %r; after `VOLTage CH0,1`: %r; after `VOLTage CHn,abc`: %r; after value 125%% of rating: %r; after unknown query `FOOBar?`: %r'
+        % (base, after_ch5, invalid[1][1], after_arg, after_over, after_unknown),
     )
     changed = [
         name
         for name, v in [
             ('CH5', after_ch5),
+            ('CH0', invalid[1][1]),
             ('bad argument', after_arg),
             ('over-range', after_over),
             ('unknown query', after_unknown),
@@ -1566,13 +1743,40 @@ def exp_errors(c: Ctx) -> None:
             'invalid input changes the status registers: %s'
             % (changed or 'no, errors are silent as far as these registers go'),
         )
-    if base[0] is not None:
-        c.finding(
-            8,
-            '`VOLTage CH5,1` was %s by the status registers'
-            % ('flagged' if after_ch5 != base else 'not flagged'),
-        )
     c.note('ESR/STB after a plain *CLS: %r (reference for the above)' % (ok_before,))
+
+    # Q6 hypothesis: bit 5 is raised only when an error enters an empty error list.
+    # `VOL?` is a deliberately invalid header (run 1: abbreviations other than the short form are
+    # not answered), so each probe times out after the probe timeout.
+    c.w('*CLS')
+    c.probe('VOL? CH1')
+    e1 = c.q('*ESR?')
+    c.probe('VOL? CH1')
+    e2 = c.q('*ESR?')
+    c.w('*CLS')
+    c.probe('VOL? CH1')
+    e3 = c.q('*ESR?')
+    supported = (
+        fnum(e1) is not None
+        and fnum(e2) is not None
+        and fnum(e3) is not None
+        and int(fnum(e1) or 0) & 32
+        and not int(fnum(e2) or 0) & 32
+        and int(fnum(e3) or 0) & 32
+    )
+    c.finding(
+        6,
+        'error-list hypothesis (`*CLS`, `VOL? CH1`, `*ESR?`, `VOL? CH1`, `*ESR?`, `*CLS`, `VOL? CH1`, `*ESR?`): '
+        '1st %s, 2nd (list not emptied) %s, 3rd (after *CLS) %s -> hypothesis %s'
+        % (
+            _esr_bits(e1),
+            _esr_bits(e2),
+            _esr_bits(e3),
+            'SUPPORTED (bit 5 only from an empty error list)'
+            if supported
+            else 'NOT supported as stated',
+        ),
+    )
 
 
 @experiment(20, 'set_forms', WRITE, (7,))
@@ -1609,6 +1813,136 @@ def exp_set_forms(c: Ctx) -> None:
     c.block(
         '| set command | result | read-back |\n|---|---|---|\n'
         + '\n'.join('| `%s` | %s | `%r` |' % row for row in res)
+    )
+
+
+class _KeepOpenLink:
+    """The tool's Link as the plug's resource, except that close() is swallowed.
+
+    SiglentSpdPlug.tearDown() closes its resource; the tool needs the session afterwards.
+    """
+
+    def __init__(self, link: Link):
+        self._link = link
+        self.close_calls = 0
+
+    def write(self, cmd: str) -> None:
+        self._link.write(cmd)
+
+    def query(self, cmd: str) -> str:
+        return self._link.query(cmd)
+
+    def close(self) -> None:
+        self.close_calls += 1
+
+    def _attr(name: str) -> property:  # type: ignore[misc]
+        return property(lambda s: getattr(s._link, name), lambda s, v: setattr(s._link, name, v))
+
+    timeout = _attr('timeout')
+    read_termination = _attr('read_termination')
+    write_termination = _attr('write_termination')
+    del _attr
+
+
+@experiment(21, 'plug_write_smoke', WRITE, (9, 12))
+def exp_plug_write_smoke(c: Ctx) -> None:
+    """The plug's write path and tearDown() against the instrument, outputs off.
+
+    Constructs SiglentSpdPlug on the tool's own link (every exchange lands in the
+    transcript), runs configure_channel(1, ...), set_output_delay(1, ...),
+    set_sense(2, 4W) and back to 2W, set_output_delay(1, 0, 0) and then tearDown(),
+    which sends `OUTPut:ALL 0`, one `OUTPut? CHn` per channel, the restore writes
+    and `:SOURce:LOCK:STATe OFF` last. Run 1 never sent `OUTPut CHn,0`,
+    `OUTPut:ALL 0` or the ON/OFF delay writes, so this path had never run on
+    hardware. Afterwards raw queries check: all outputs 0, LOCK? 0, every snapshot value back.
+    Open question 9 (ON/OFF delay writes and read-back) and 12 (unlock stays the last write).
+    """
+    c.strict_outputs_off()
+    if c.no_ocp:
+        raise Skip('OCP? unanswered: the tool never writes OCP, configure_channel would')
+    t = c.q('OUTPut:TRACK?')
+    if t is None or t.strip().upper() not in ('0', 'INDEPENDENT'):
+        raise Skip('track mode is %r; the smoke runs in independent mode only' % t)
+    try:
+        from siglent_spd_openhtf.plug import SenseMode, SiglentSpdPlug
+    except Exception as exc:
+        raise Skip('siglent_spd_openhtf not importable: %s' % exc) from exc
+    keep = _KeepOpenLink(c.link)
+    saved = (keep.timeout, keep.read_termination, keep.write_termination)
+    plug: Any = None
+    failed: list[str] = []
+
+    def step(label: str, fn: Callable[[], Any]) -> None:
+        try:
+            fn()
+            c.note('plug.%s: ok' % label)
+        except Exception as exc:
+            failed.append(label)
+            c.note('plug.%s RAISED %s: %s' % (label, type(exc).__name__, exc))
+
+    try:
+        plug = SiglentSpdPlug(resource=keep, outputs_off_on_teardown=True, restore_state=True)
+        step(
+            'configure_channel(1, ...)',
+            lambda: plug.configure_channel(
+                1, voltage=1.0, current=0.1, ovp=2.0, ocp=0.5, ocp_enabled=True, ocp_delay=0.5
+            ),
+        )
+        step(
+            'set_output_delay(1, on_s=0.5, off_s=0.5)',
+            lambda: plug.set_output_delay(1, on_s=0.5, off_s=0.5),
+        )
+        step('set_sense(2, FOUR_WIRE)', lambda: plug.set_sense(2, SenseMode.FOUR_WIRE))
+        step('set_sense(2, TWO_WIRE)', lambda: plug.set_sense(2, SenseMode.TWO_WIRE))
+        step(
+            'set_output_delay(1, on_s=0, off_s=0)',
+            lambda: plug.set_output_delay(1, on_s=0, off_s=0),
+        )
+    except Exception as exc:
+        failed.append('construct')
+        c.note('SiglentSpdPlug(...) RAISED %s: %s' % (type(exc).__name__, exc))
+    finally:
+        if plug is not None:
+            c.note(
+                'plug.tearDown() follows (OUTPut:ALL 0, OUTPut? per channel, restore, unlock last)'
+            )
+            try:
+                plug.tearDown()
+                c.note(
+                    "plug.tearDown(): returned; the tool's link was closed %d time(s) by the plug and kept open"
+                    % keep.close_calls
+                )
+            except Exception as exc:
+                failed.append('tearDown')
+                c.note('plug.tearDown() RAISED %s: %s' % (type(exc).__name__, exc))
+        keep.timeout, keep.read_termination, keep.write_termination = saved
+    # --- verification with raw queries -------------------------------------------------------
+    outs = {n: c.q('OUTPut? CH%d' % n) for n in (1, 2, 3, 4)}
+    lock = c.q('LOCK?')
+    diffs: list[str] = []
+    for n in (1, 2, 3, 4):
+        for name, qcmd, _ in CH_FIELDS:
+            want = c.snapshot['channels'][str(n)].get(name) if c.snapshot else None
+            if want is None:
+                continue
+            now = c.q(qcmd.format(n=n))
+            if now is None or not values_match(want, now):
+                diffs.append('CH%d %s wanted %r now %r' % (n, name, want, now))
+    for n in (2, 3):
+        want = c.snapshot['sense'].get(str(n)) if c.snapshot else None
+        now = c.q('MODE? CH%d' % n)
+        if want is not None and (now is None or not values_match(want, now)):
+            diffs.append('sense CH%d wanted %r now %r' % (n, want, now))
+    outs_ok = all(v is not None and v.strip() in ('0', 'OFF') for v in outs.values())
+    c.finding(
+        12,
+        'after plug.tearDown(): outputs %s (%s); LOCK? -> %r (wanted 0, the unlock is the last write)'
+        % ('all 0' if outs_ok else 'NOT ALL OFF', outs, lock),
+    )
+    c.finding(
+        9,
+        'plug write path (configure_channel, ON/OFF delays, sense) raised: %s; snapshot values not back after tearDown(): %s'
+        % (failed or 'nothing', diffs or 'none, all restored'),
     )
 
 
@@ -1748,6 +2082,156 @@ def exp_output_settling(c: Ctx) -> None:
     )
 
 
+def _poll_output(
+    c: Ctx,
+    n: int,
+    origin: float,
+    seconds: float,
+    action_at: float | None = None,
+    action: str = '',
+) -> list[tuple[float, str | None, float | None]]:
+    """Every 100 ms: `OUTPut? CHn` and `MEASure:VOLTage? CHn`; optionally one write at `action_at` s."""
+    rows: list[tuple[float, str | None, float | None]] = []
+    done = action_at is None
+    k = 0
+    while True:
+        target = k * 0.1
+        c.sleep(target - (c.now() - origin))
+        if not done and action_at is not None and target >= action_at:
+            c.w(action)
+            rows.append((c.now() - origin, 'sent: ' + action, None))
+            done = True
+        rows.append(
+            (c.now() - origin, c.q('OUTPut? CH%d' % n), fnum(c.q('MEASure:VOLTage? CH%d' % n)))
+        )
+        k += 1
+        if target >= seconds:
+            return rows
+
+
+def _summarise_poll(rows: list[tuple[float, str | None, float | None]]) -> str:
+    samples = [(t, o, v) for t, o, v in rows if not str(o).startswith('sent:')]
+    changes: list[str] = []
+    last = object()
+    for t, o, _ in samples:
+        if o != last:
+            changes.append('%s from t=%.2f s' % (o, t))
+            last = o
+    low = next((t for t, _, v in samples if v is not None and v <= 0.1), None)
+    peak = max((v for _, _, v in samples if v is not None), default=None)
+    return (
+        'OUTPut? replies: %s; MEASure:VOLTage? first sample at or below 0.1 V: %s (peak %s V); %d samples'
+        % (
+            ', '.join(changes) or 'none',
+            't=%.2f s' % low if low is not None else 'never',
+            peak,
+            len(samples),
+        )
+    )
+
+
+@experiment(31, 'off_delay', OUTPUT, (11, 22), flag='allow_output')
+def exp_off_delay(c: Ctx) -> None:
+    """OUTPut:OFF:DELay semantics with the output on (no load): CH1 1.0 V / 0.1 A, OFF delay 2 s.
+
+    Open question 22: what does `OUTPut? CHn` return between `OUTPut CHn,0` and the
+    actual switch-off; does `OUTPut:ALL 0` honour the per-channel delay; does setting
+    the delay to 0 while a delayed switch-off is pending switch off immediately.
+    Three scenarios, each polled every 100 ms for 3 s with `OUTPut? CH1` and
+    `MEASure:VOLTage? CH1`. Only with --allow-output --confirm-no-load. The whole body is
+    in a try/finally that sets the delay to 0, forces `OUTPut CH1,0` and waits for
+    `OUTPut? CH1` = 0; the snapshot restore follows.
+    """
+    n = c.ch
+    c.require_independent()
+    c.strict_outputs_off()
+    v_set, i_set = 1.0, 0.1
+    c.w('VOLTage CH%d,%.3f' % (n, v_set))
+    c.w('CURRent CH%d,%.3f' % (n, i_set))
+    rv, ri = fnum(c.q('VOLTage? CH%d' % n)), fnum(c.q('CURRent? CH%d' % n))
+    if not (close_to(rv, v_set, 5e-3) and close_to(ri, i_set, 5e-3)):
+        raise Skip('setpoints did not read back (%r V, %r A); refusing to switch on' % (rv, ri))
+    delay_s = 2.0
+    blocks: list[str] = []
+
+    def confirm_off(limit_s: float = 12.0) -> str | None:
+        st = None
+        t_start = c.now()
+        while c.now() - t_start <= limit_s:
+            st = c.q('OUTPut? CH%d' % n)
+            if st is not None and st.strip() in ('0', 'OFF'):
+                return st
+            c.sleep(0.25)
+        return st
+
+    def scenario(
+        label: str, off_cmd: str, action_at: float | None = None, action: str = ''
+    ) -> None:
+        c.w('OUTPut:OFF:DELay CH%d,%g' % (n, delay_s))
+        rb = c.q('OUTPut:OFF:DELay? CH%d' % n)
+        if fnum(rb) is None or not close_to(fnum(rb), delay_s, 5e-3):
+            c.note('%s: OFF delay did not read back (%r); scenario skipped' % (label, rb))
+            return
+        c.w('OUTPut CH%d,1' % n)
+        st = c.q('OUTPut? CH%d' % n)
+        if st is None or st.strip() not in ('1', 'ON'):
+            c.note('%s: OUTPut? after OUTPut CH%d,1 reads %r; scenario stopped' % (label, n, st))
+            return
+        c.sleep(1.0)
+        v_on = c.q('MEASure:VOLTage? CH%d' % n)
+        c.q('MEASure:RUN:MODE? CH%d' % n)
+        origin = c.now()
+        c.w(off_cmd)
+        rows = _poll_output(c, n, origin, 3.0, action_at, action)
+        summary = _summarise_poll(rows)
+        c.finding(
+            22,
+            '%s (delay %g s, V while on %s): `%s`%s -> %s'
+            % (
+                label,
+                delay_s,
+                v_on,
+                off_cmd,
+                (' then at ~%.1f s `%s`' % (action_at, action)) if action_at is not None else '',
+                summary,
+            ),
+        )
+        blocks.append(
+            '%s: t s, OUTPut?, V\n\n```\n%s\n```'
+            % (
+                label,
+                '\n'.join('%.2f  %s  %s' % (t, o, v if v is not None else '') for t, o, v in rows),
+            )
+        )
+        end = confirm_off()
+        c.note('%s: OUTPut? settles at %r' % (label, end))
+
+    c.policy.on_allowed = {n}
+    try:
+        scenario('A. OUTPut CHn,0 with a pending delay', 'OUTPut CH%d,0' % n)
+        scenario('B. OUTPut:ALL 0 with a pending delay', 'OUTPut:ALL 0')
+        scenario(
+            'C. delay set to 0 while the switch-off is pending',
+            'OUTPut CH%d,0' % n,
+            action_at=0.5,
+            action='OUTPut:OFF:DELay CH%d,0' % n,
+        )
+    finally:
+        try:
+            c.w('OUTPut:OFF:DELay CH%d,0' % n)
+            c.q('OUTPut:OFF:DELay? CH%d' % n)
+        except Exception as exc:  # pragma: no cover - reported by the global restore too
+            c.note('final OFF delay reset failed: %s' % exc)
+        try:
+            c.w('OUTPut CH%d,0' % n)
+        finally:
+            c.policy.on_allowed = set()
+            end = confirm_off()
+            c.note('final: OUTPut? CH%d reads %r after the forced off' % (n, end))
+    for b in blocks:
+        c.block(b)
+
+
 EXPERIMENTS.sort(key=lambda e: e.num)
 
 
@@ -1756,8 +2240,19 @@ EXPERIMENTS.sort(key=lambda e: e.num)
 # ---------------------------------------------------------------------------
 
 
-def parse_numlist(text: str | None) -> set[int]:
-    return {int(x) for x in re.split(r'[,\s]+', text.strip()) if x} if text else set()
+def parse_numlist(text: str | list[str] | None) -> set[int]:
+    """'30,31', '15 19', '15-19' or a list of such strings -> {numbers}."""
+    out: set[int] = set()
+    for item in [text] if isinstance(text, str) else (text or []):
+        for part in re.split(r'[,\s]+', item.strip()):
+            if not part:
+                continue
+            m = re.fullmatch(r'(\d+)-(\d+)', part)
+            if m:
+                out |= set(range(int(m.group(1)), int(m.group(2)) + 1))
+            else:
+                out.add(int(part))
+    return out
 
 
 def selected(args: argparse.Namespace) -> list[tuple[Experiment, str]]:
@@ -1772,6 +2267,8 @@ def selected(args: argparse.Namespace) -> list[tuple[Experiment, str]]:
             reason = 'in --skip'
         elif e.tier == WRITE and args.read_only:
             reason = '--read-only'
+        elif e.tier == OUTPUT and args.outputs_off_only:
+            reason = '--outputs-off-only'
         elif e.tier == OUTPUT and not (args.allow_output and args.confirm_no_load):
             reason = 'needs --allow-output and --confirm-no-load'
         elif e.flag and not getattr(args, e.flag, False):
@@ -1875,9 +2372,12 @@ def run_experiments(
 
 
 def write_channels(c: Ctx) -> list[int]:
-    chans = {c.ch}
-    chans |= {2, 3} if any(e.num in (15, 16) for e, r in selected(c.args) if not r) else set()
-    return sorted(chans)
+    """Channels snapshotted, restored after every write experiment and checked at the end.
+
+    Always all four: CH2/CH3 are touched by the coupling and sense experiments, CH4 by an
+    invalid-channel write that may land somewhere else (run 1 never read it back).
+    """
+    return [1, 2, 3, 4]
 
 
 def render_report(
@@ -1955,7 +2455,7 @@ def render_report(
         for q, text in r.findings:
             by_q.setdefault(q, []).append((r.exp.num, text))
     ran = {r.exp.num for r in results if r.status == 'done'}
-    for q in range(1, 20):
+    for q in range(1, 23):
         a('### Q%d %s' % (q, Q_TITLES[q]))
         a('')
         covering = [e.num for e in EXPERIMENTS if q in e.questions]
@@ -2052,6 +2552,28 @@ def print_plan(
     )
 
 
+def compress_cmds(tokens: list[str]) -> list[str]:
+    """Collapse runs of one, two or three commands that repeat back to back: 'A / B (x30)'."""
+    out: list[str] = []
+    i = 0
+    while i < len(tokens):
+        for period in (1, 2, 3):
+            block = tokens[i : i + period]
+            if len(block) < period:
+                continue
+            reps = 1
+            while tokens[i + reps * period : i + (reps + 1) * period] == block:
+                reps += 1
+            if reps > 1:
+                out.append(' / '.join(block) + ' (x%d)' % reps)
+                i += reps * period
+                break
+        else:
+            out.append(tokens[i])
+            i += 1
+    return out
+
+
 def dry_plan(args: argparse.Namespace) -> int:
     """Run every enabled experiment against DryResource to list the exact commands."""
     policy = SafetyPolicy()
@@ -2072,21 +2594,11 @@ def dry_plan(args: argparse.Namespace) -> int:
             per[r.exp.num] = ['(would be skipped here: %s)' % r.error]
             continue
         lo, hi = r.txn_range
-        lines: list[str] = []
-        last, count = None, 0
-        for t in link.txns[lo:hi]:
-            if t.kind == 'LATE':
-                continue
-            cur = ('W ' if t.kind == 'W' else 'Q ') + t.cmd
-            if cur == last:
-                count += 1
-                continue
-            if last is not None:
-                lines.append(last + (' (x%d)' % count if count > 1 else ''))
-            last, count = cur, 1
-        if last is not None:
-            lines.append(last + (' (x%d)' % count if count > 1 else ''))
-        cap = 6 if r.exp.tier == READ else 80
+        tokens = [
+            ('W ' if t.kind == 'W' else 'Q ') + t.cmd for t in link.txns[lo:hi] if t.kind != 'LATE'
+        ]
+        lines = compress_cmds(tokens)
+        cap = 6 if r.exp.tier == READ else 400
         per[r.exp.num] = lines[:cap] + (
             ['... %d more distinct commands' % (len(lines) - cap)] if len(lines) > cap else []
         )
@@ -2378,7 +2890,7 @@ def restore_mode(args: argparse.Namespace) -> int:
                 return 3
         policy.writes_enabled = True
         snap = {k: data[k] for k in ('channels', 'sense', 'track', 'lock')}
-        chans = data.get('channels_written') or [1]
+        chans = sorted(int(k) for k in data['channels'])  # all snapshotted channels, CH4 included
         items = restore_snapshot(c, snap, chans)
         for i in items:
             print('%-22s wanted %-12r now %-12r %s' % (i.name, i.orig, i.now, i.status))
@@ -2451,12 +2963,25 @@ def build_parser() -> argparse.ArgumentParser:
         action='store_true',
         help='run only the read-only experiments (no writes at all)',
     )
-    ap.add_argument('--only', help='comma-separated experiment numbers to run')
-    ap.add_argument('--skip', help='comma-separated experiment numbers to skip')
+    ap.add_argument(
+        '--only',
+        nargs='+',
+        metavar='N',
+        help='experiment numbers to run: several allowed (30,31  or  15 19  or  15-19)',
+    )
+    ap.add_argument(
+        '--skip', nargs='+', metavar='N', help='experiment numbers to skip (same syntax as --only)'
+    )
+    ap.add_argument(
+        '--outputs-off-only',
+        action='store_true',
+        help='run every experiment that keeps the outputs off (read and write tier) and never the '
+        'output tier, even if --allow-output is given; this is the default without --allow-output',
+    )
     ap.add_argument(
         '--allow-output',
         action='store_true',
-        help='enable experiment 30 (output ON, CH1 1.0 V / 0.1 A); needs --confirm-no-load',
+        help='enable the output tier, experiments 30 and 31 (output ON, CH1 1.0 V / 0.1 A); needs --confirm-no-load',
     )
     ap.add_argument(
         '--confirm-no-load',
@@ -2504,6 +3029,19 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     ap = build_parser()
     args = ap.parse_args(argv)
+    if args.outputs_off_only and args.allow_output:
+        ap.error('--outputs-off-only and --allow-output exclude each other')
+    try:
+        known = {e.num for e in EXPERIMENTS}
+        for opt in ('only', 'skip'):
+            unknown = parse_numlist(getattr(args, opt)) - known
+            if unknown:
+                ap.error(
+                    '--%s: no such experiment %s (known: %s)'
+                    % (opt, sorted(unknown), sorted(known))
+                )
+    except ValueError:
+        ap.error('--only/--skip take experiment numbers such as 30,31 or 15-19')
     if args.allow_output and not args.confirm_no_load:
         ap.error(
             '--allow-output requires --confirm-no-load (nothing may be connected to the outputs)'

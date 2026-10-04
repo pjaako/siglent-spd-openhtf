@@ -61,11 +61,13 @@ python3 tools/bare_socket_check.py --sweep-terms
 #    and the plug's own getters if the package is installed
 python3 tools/hw_acceptance.py --read-only --report acceptance_report_readonly.local.md
 
-# 4. Writes with all outputs staying OFF (CH1 setpoints/protection, CH2/CH3 coupling and sense, lock)
+# 4. Writes with all outputs staying OFF (CH1 setpoints/protection, CH2/CH3 coupling and sense, lock,
+#    setpoint writes while coupled, invalid-channel writes, the plug's write path and tearDown())
 python3 tools/hw_acceptance.py --report acceptance_report.local.md
 
-# 5. Optional, only with nothing connected: output on at 1.0 V / 0.1 A, CH1, settling curve
-python3 tools/hw_acceptance.py --only 30 --allow-output --confirm-no-load \
+# 5. Optional, only with nothing connected: output on at 1.0 V / 0.1 A, CH1:
+#    30 = settling curve, 31 = OUTPut:OFF:DELay semantics
+python3 tools/hw_acceptance.py --only 30,31 --allow-output --confirm-no-load \
     --report acceptance_report_output.local.md
 
 # 6. Optional extras
@@ -74,6 +76,11 @@ python3 tools/hw_acceptance.py --read-only --only 7 --try-vxi11        # needs a
 ```
 
 After step 4 look at the front panel and note whether it is locked (question 12).
+
+`--only` takes several numbers (`--only 30,31`, `--only 15 19 21`, `--only 15-21`).
+`--outputs-off-only` runs everything that keeps the outputs off and never the output tier,
+even if `--allow-output` were given (the two flags exclude each other; without
+`--allow-output` the output tier is off anyway, the flag just says so on the command line).
 
 ### Exit codes of `hw_acceptance.py`
 
@@ -97,7 +104,8 @@ python3 tools/hw_acceptance.py --restore-snapshot
 These are checks on every string before it reaches the socket, not just documentation.
 
 - No output is ever switched on unless `--allow-output --confirm-no-load` is given, and then
-  only `OUTPut CH1,1` (the `--channel`) inside experiment 30. `OUTPut:ALL 1` is never sent.
+  only `OUTPut CH1,1` (the `--channel`) inside experiments 30 and 31. `OUTPut:ALL 1` is never
+  sent.
 - Never sent, in any mode: `*RST`, `DEFault:RESET`, `FACTory:RESET`, anything under LAN, DHCP,
   GPIB, STORage, CALibrate, WAVE or LIST (queries included). `*TST?` only with
   `--allow-selftest`. Any write whose header is not on a short allow list is refused.
@@ -111,7 +119,17 @@ These are checks on every string before it reaches the socket, not just document
   off anything this run switched on, reports every value it could not restore, and queries the
   outputs one last time.
 - Write experiments touch CH1 only (`--channel` to change). The coupling and sense
-  experiments (15, 16) necessarily use CH2/CH3, only while their outputs are off.
+  experiments (15, 16) necessarily use CH2/CH3, and 21 sets CH2 sense, only while their outputs
+  are off. Experiments 15 and 21 insist on **all four** outputs reading 0
+  (`--i-know-outputs-are-on` does not override that). The snapshot, the restore after every write
+  experiment and the final output check cover **CH1 to CH4**: an invalid-channel write
+  (experiment 19) might land on CH4, and run 1 never read it back.
+- Experiment 31 sets the OFF delay to 2 s on CH1 and switches it on; its `finally:` first sets the
+  delay to 0, then sends `OUTPut CH1,0` and polls `OUTPut? CH1` until it reads 0.
+- `Link.query` reads one reply line per command line. The instrument answers a line with
+  several queries as one line, the replies concatenated without separator (run 1: `*IDN?;*OPC?`
+  -> `...4.1.2.9R11`), so counting `?` timed out falsely. Bytes that arrive late are logged
+  as `LATE`; a failed query keeps what it received.
 
 ## 4. After the run
 
@@ -161,20 +179,28 @@ or settling slower than `wait_for_voltage`'s defaults, change those defaults too
 | 3 | LAN: VXI-11, simultaneous connections, web, telnet | bare second-connection test (Q3 verdict); bare `--probe-ports` (web 80, telnet 23, portmapper 111); E7 `--try-vxi11` | web/telnet/VXI-11 need a direct LAN path, not a single forwarded port |
 | 4 | Response formats, units, decimals, `\s`, terminators, actual `*IDN?` | bare Q4 table; E1, E2, E10, E11, E14 | `*IDN?` of the other two models: out of scope; LIST/WAVE/STORAGE formats: out of scope |
 | 5 | Missing responses (`OCP?`, LAN, GPIB, STORage) | bare Q5 line; E2, E13 | LAN/GPIB/STORage: out of scope (blocked by the safety policy) |
-| 6 | Error reporting; `*ESR?`/`*STB?`; `*TST?` | bare before/after status registers; E6, E19; `*TST?` value with E6 `--allow-selftest` | what `*TST?` = 0 means: the value is recorded, its meaning needs the manufacturer |
+| 6 | Error reporting; `*ESR?`/`*STB?`; `*TST?` | bare before/after status registers; E6, E19 (incl. the *CLS / `VOL? CH1` / `*ESR?` sequence that tests "bit 5 only from an empty error list"); `*TST?` value with E6 `--allow-selftest` | what `*TST?` = 0 means: the value is recorded, its meaning needs the manufacturer |
 | 7 | Case/forms: colon, `[:SOURce]`, short forms, brackets, spacing | bare forms table; E3 (queries); E14, E20 (writes) | none |
-| 8 | Channel argument optional? invalid channel? | bare forms (no channel, CH0, CH5, `1`, `MODE? CH1`, `OUTPut:TRACK? CH1`); E2, E3, E19 | a write without channel is deliberately not tried (it could hit another channel) |
+| 8 | Channel argument optional? invalid channel? | bare forms (no channel, CH0, CH5, `1`, `MODE? CH1`, `OUTPut:TRACK? CH1`); E2, E3; E19 (`VOLTage CH5,1` and `CH0,1`, all four channels' V/I read before and after, CH4 included) | a write without channel is deliberately not tried (it could hit another channel) |
 | 9 | MIN/MAX/DEF; rounding vs clamping vs error out of range | bare parameter-keyword table; E4 (queries); E10, E11, E12, E13, E14 (sets and read-back) | none |
 | 10 | OVP/OCP interaction with other settings | E12 (OVP vs setpoint), E13 (OCP vs current), E15 (series/parallel re-initialisation) | state after a trip and after `RESET:PROTect`, `OUTPut?` while tripped: needs a load that trips protection, out of scope |
 | 11 | Timing, settling, `*OPC?`, `*WAI` | E5 (median of 5), E18; E30 (output on, settling curve, `--allow-output`) | none |
-| 12 | Remote lock | E17 (`LOCK`, remote writes while locked) | **needs front panel**: is it locked after the session? |
-| 13 | `OUTPut:TRACK` and `MODE` mappings; query number vs word | E15, E16 | rejection of `OUTPut:TRACK` while an output is on: not tested (would need an output on), out of scope |
+| 12 | Remote lock | E17 (`LOCK`, remote writes while locked); E21 (the plug's `tearDown()` leaves `LOCK?` = 0, unlock is the last write) | **needs front panel**: is it locked after the session? |
+| 13 | `OUTPut:TRACK` and `MODE` mappings; query number vs word | E15, E16 | rejection of `OUTPut:TRACK` while an output is on: not tested (would need an output on); owner decides, see `docs/hardware_findings.md` "Still open" |
 | 14 | Rated table; real limits via `...? CHn,MAX` | bare parameter-keyword table; E4; E15 (series/parallel limits) | SPD4306X CH4 `15/1`: needs that model, out of scope |
 | 15 | LIST | none | out of scope (blocked by the safety policy) |
 | 16 | WAVE | none | out of scope (blocked) |
 | 17 | STORAGE | none | out of scope (blocked) |
 | 18 | `*RST` state | none | out of scope: `*RST` is never sent by these tools |
 | 19 | Programming examples validated | none | out of scope |
+| 20 | Channel addressing with optional nodes | answered in run 1 (E3, E20, E10-E13) | none |
+| 21 | Series/parallel setpoint meaning | read side: run 1 E15; **write side: E15 (extended)** writes `VOLTage CH2,20` in SERIES and `CURRent CH2,5` in PARALLEL (outputs off), reads CH2 and CH3, then `MAXimum` and `OVP`/`OCP CH2,MAXimum`, then restores CH2/CH3 | none once run |
+| 22 | Output OFF delay semantics | **E31** (`--allow-output --confirm-no-load`): `OUTPut? CH1` and `MEASure:VOLTage? CH1` every 100 ms for 3 s after `OUTPut CH1,0`, after `OUTPut:ALL 0`, and after delay set to 0 while a switch-off is pending | none once run |
+
+Not an open question of section 8 but part of the same visit: E21 (plug write smoke) sends
+`OUTPut:ALL 0`, per-channel `OUTPut?`, the ON/OFF delay writes and `:SOURce:LOCK:STATe OFF`
+through `SiglentSpdPlug`, which run 1 never did (it covers the ON/OFF delay write side of
+question 9 and the unlock of question 12).
 
 ## 6. Experiment index (`hw_acceptance.py`)
 
@@ -193,12 +219,47 @@ or settling slower than `wait_for_voltage`'s defaults, change those defaults too
 | 12 | ovp | write | 9, 10 |
 | 13 | ocp | write | 5, 9, 10 |
 | 14 | ocp_state_delay | write | 4, 7, 9 |
-| 15 | track | write | 10, 13, 14 |
+| 15 | track | write | 10, 13, 14, 21 |
 | 16 | sense | write | 13 |
 | 17 | lock | write | 12 |
 | 18 | opc_wai | write | 1, 11 |
 | 19 | error_reporting | write | 6, 8 |
 | 20 | set_forms | write | 7 |
+| 21 | plug_write_smoke (outputs off; imports the plug) | write | 9, 12 |
 | 30 | output_settling (`--allow-output --confirm-no-load`) | output | 11 |
+| 31 | off_delay (`--allow-output --confirm-no-load`) | output | 11, 22 |
 
 `--only 1,2,5` and `--skip 3` select experiments; `--read-only` drops the write tier.
+
+## 7. Next hardware visit (run 2)
+
+Run 1 is analysed in `docs/hardware_findings.md`. Run 2 closes what that file lists under
+"Still open". Same prerequisites as section 1, `PSU_HOST` exported, all outputs off, repository
+root as the working directory.
+
+```bash
+export PSU_HOST=192.0.2.10
+
+# (a) outputs off: extended 15 (setpoint writes in SERIES/PARALLEL, Q21), 19 (invalid channels
+#     with CH4 read back, the Q6 error-list sequence), 21 (the plug's write path and tearDown()),
+#     plus the rest of the write tier for regression
+python3 tools/hw_acceptance.py --report run2.local.md
+
+# (b) output on, one channel, 1.0 V / 0.1 A: 30 (settling curve) and 31 (OFF-delay semantics, Q22)
+#     *** NOTHING CONNECTED TO ANY OUTPUT TERMINAL ***
+python3 tools/hw_acceptance.py --only 30,31 --allow-output --confirm-no-load \
+    --report run2_output.local.md
+```
+
+**Before (b) make sure nothing is connected to any output terminal of the supply** (no DUT, no
+load, no cables, no meter leads). Run (b) only if (a) finished with exit code 0 or 1 and its
+safety log shows the restore without `FAILED`.
+
+(c) **Afterwards look at the front panel and report two things:** is the panel unlocked (no lock
+icon, keys usable; open question 12)? And is CH4 still 0 V / 0 A (an invalid-channel write in
+experiment 19 might have reached it; open question 8)? If the panel is still locked, a long press
+on the Lock key releases it.
+
+Afterwards the reports go to the analyst agent, who writes a run-2 section in
+`docs/hardware_findings.md`; from there the findings go into README ("Things the manual does not
+tell you"), the plug and the fake, as after run 1. Keep `*.local.*` files out of git.
