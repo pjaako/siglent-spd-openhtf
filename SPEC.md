@@ -184,7 +184,13 @@ CH2 in SERIES, the voltage of CH2 in PARALLEL), whether through `set_voltage`,
 `set_current` or `configure_channel`, raises `RuntimeError` naming question 21
 before anything is sent: nobody has tried them on hardware. `configure_channel`
 checks its `voltage`/`current` items up front; OVP/OCP items are not affected.
-`restore()` restores the allowed quantity and skips the rest (reporting it).
+`restore()` restores the allowed quantity and skips the rest (reporting those items
+whose value differs), and leaves CH2 alone while CH3's output is on (CH3 follows
+CH2). The two writes are allowed only when `self.model` is known and `tested` (an
+unknown or untested model may read the value per half), and the track mode is read
+fresh from the instrument (`OUTPut:TRACK?`, about 4 ms) before every CH2/CH3
+voltage or current write, because the cached mode can be stale (panel, second
+client); CH1 and CH4 setters never query it.
 Not yet tried (open): the upper limit of a numeric combined write (5 A was
 accepted in PARALLEL although `MAX` is 3.232 A; the `MAXimum` keyword stays
 per channel) and everything listed above as refused.

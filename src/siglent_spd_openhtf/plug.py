@@ -623,14 +623,29 @@ class SiglentSpdPlug(BasePlug):  # type: ignore[misc]
                     values['off_delay'],
                 ),
             ]
+            coupled_on = False
+            if n == 2 and mode is not TrackMode.INDEPENDENT:
+                # CH3 follows CH2's combined setpoint: do not touch it under a live CH3 either
+                try:
+                    coupled_on = self.output(3)
+                except Exception as exc:
+                    failures.append(f'CH3 output state: {exc}')
+                    coupled_on = True
             for label, key, get_item, set_item in (
                 ('voltage', 'voltage', self.voltage_setpoint, self.set_voltage),
                 ('current', 'current', self.current_setpoint, self.set_current),
             ):
-                reason = self._coupled_write_refusal(n, label, mode)
-                if reason is None:
+                reason = self._coupled_write_refusal(n, label, mode, self.model)
+                if reason is None and coupled_on:
+                    skipped.append(f'CH{n} {label} (CH3 follows CH2 and its output is on)')
+                elif reason is None:
                     items.append((label, get_item, set_item, values[key]))
                 else:
+                    try:  # nothing to restore (and nothing to report) if it is already right
+                        if self._unchanged(values[key], get_item(n)):
+                            continue
+                    except Exception:
+                        pass
                     skipped.append(
                         f'CH{n} {label} ({mode.value} mode: write side of open question 21 '
                         'untested)'
@@ -655,7 +670,9 @@ class SiglentSpdPlug(BasePlug):  # type: ignore[misc]
 
     # ---- limits -------------------------------------------------------------------------
 
-    def _rating(self, ch: int, quantity: str = '') -> ChannelRating | None:
+    def _rating(
+        self, ch: int, quantity: str = '', mode: TrackMode | None = None
+    ) -> ChannelRating | None:
         """Rated limit of a channel, None if the model is unknown.
 
         The guard stays at the rated value. The instrument itself accepts up to 1.01 x the
@@ -669,25 +686,26 @@ class SiglentSpdPlug(BasePlug):  # type: ignore[misc]
         if self.model is None:
             return None
         if ch == 2 and quantity in ('voltage', 'current'):
-            mode = self._track if self._track is not None else self.track()
             if mode is TrackMode.SERIES and quantity == 'voltage':
                 return self.model.series
             if mode is TrackMode.PARALLEL and quantity == 'current':
                 return self.model.parallel
         return self.model.channels[ch - 1]
 
-    def _guard_voltage(self, ch: int, volts: float) -> None:
-        rating = self._rating(ch, 'voltage')
+    def _guard_voltage(self, ch: int, volts: float, mode: TrackMode | None = None) -> None:
+        rating = self._rating(ch, 'voltage', mode)
         if rating is not None and volts > rating.voltage + _RATING_EPS:
             raise ValueError(f'{volts:g} V exceeds the {rating.voltage:g} V rating of CH{ch}')
 
-    def _guard_current(self, ch: int, amps: float) -> None:
-        rating = self._rating(ch, 'current')
+    def _guard_current(self, ch: int, amps: float, mode: TrackMode | None = None) -> None:
+        rating = self._rating(ch, 'current', mode)
         if rating is not None and amps > rating.current + _RATING_EPS:
             raise ValueError(f'{amps:g} A exceeds the {rating.current:g} A rating of CH{ch}')
 
     @staticmethod
-    def _coupled_write_refusal(ch: int, quantity: str, mode: TrackMode) -> str | None:
+    def _coupled_write_refusal(
+        ch: int, quantity: str, mode: TrackMode, model: Model | None
+    ) -> str | None:
         """Why a ``quantity`` ('voltage' or 'current') write on CH``ch`` is refused, or None.
 
         verified on SPD4323X, firmware 4.1.2.9R1, 2026-10-04 (docs/hardware_findings.md run 2,
@@ -695,27 +713,44 @@ class SiglentSpdPlug(BasePlug):  # type: ignore[misc]
         from CH2, CH3 follows with half), in PARALLEL the current written to CH2 is the combined
         current. Nothing else was written in a coupled mode: a write to CH3, the current of CH2
         in SERIES and the voltage of CH2 in PARALLEL are untested, so they stay refused (a wrong
-        guess would be applied to the terminals before the read-back could object).
+        guess would be applied to the terminals before the read-back could object). The two
+        verified writes are allowed only on a model with ``tested`` set (an unknown model or an
+        untested one may read the value per half).
         """
         if ch not in (2, 3) or mode is TrackMode.INDEPENDENT:
             return None
-        if ch == 2 and (
-            (mode is TrackMode.SERIES and quantity == 'voltage')
-            or (mode is TrackMode.PARALLEL and quantity == 'current')
+        if (
+            ch == 2
+            and model is not None
+            and model.tested
+            and (
+                (mode is TrackMode.SERIES and quantity == 'voltage')
+                or (mode is TrackMode.PARALLEL and quantity == 'current')
+            )
         ):
             return None
         return (
             f'refusing to write the {quantity} setpoint of CH{ch} while the track mode is '
             f'{mode.value}: only the CH2 voltage in SERIES and the CH2 current in PARALLEL '
-            'have been verified on hardware (open question 21)'
+            'on a model tested on hardware (the SPD4323X) are allowed (open question 21)'
         )
 
-    def _require_coupled_write_allowed(self, ch: int, quantity: str) -> None:
+    def _fresh_track(self, ch: int) -> TrackMode | None:
+        """The track mode read from the instrument now, for CH2/CH3 writes only (else None).
+
+        The cached mode can be stale (the mode can be changed from the panel or by another
+        client after it was read), and a wrong mode would widen the guard or let a write
+        through that must be refused. One ``OUTPut:TRACK?`` costs about 4 ms.
+        """
+        return self.track() if ch in (2, 3) else None
+
+    def _require_coupled_write_allowed(
+        self, ch: int, quantity: str, mode: TrackMode | None
+    ) -> None:
         """Raise RuntimeError before anything is sent if the coupled-mode write is unverified."""
-        if ch not in (2, 3):
+        if mode is None:
             return
-        mode = self._track if self._track is not None else self.track()
-        reason = self._coupled_write_refusal(ch, quantity, mode)
+        reason = self._coupled_write_refusal(ch, quantity, mode, self.model)
         if reason is not None:
             raise RuntimeError(reason)
 
@@ -724,8 +759,9 @@ class SiglentSpdPlug(BasePlug):  # type: ignore[misc]
     def set_voltage(self, ch: int | Channel, volts: float) -> None:
         n = _channel(ch)
         value = _nonnegative('volts', volts)
-        self._guard_voltage(n, value)
-        self._require_coupled_write_allowed(n, 'voltage')
+        mode = self._fresh_track(n)
+        self._guard_voltage(n, value, mode)
+        self._require_coupled_write_allowed(n, 'voltage', mode)
         self.write_verified(_Scpi.voltage(n, self._fmt(value)), _Scpi.voltage_query(n), value)
 
     def voltage_setpoint(self, ch: int | Channel) -> float:
@@ -743,8 +779,9 @@ class SiglentSpdPlug(BasePlug):  # type: ignore[misc]
     def set_current(self, ch: int | Channel, amps: float) -> None:
         n = _channel(ch)
         value = _nonnegative('amps', amps)
-        self._guard_current(n, value)
-        self._require_coupled_write_allowed(n, 'current')
+        mode = self._fresh_track(n)
+        self._guard_current(n, value, mode)
+        self._require_coupled_write_allowed(n, 'current', mode)
         self.write_verified(_Scpi.current(n, self._fmt(value)), _Scpi.current_query(n), value)
 
     def current_setpoint(self, ch: int | Channel) -> float:
@@ -833,10 +870,12 @@ class SiglentSpdPlug(BasePlug):  # type: ignore[misc]
         """
         n = _channel(ch)
         enabled = None if ocp_enabled is None else _boolean('ocp_enabled', ocp_enabled)
-        if voltage is not None:
-            self._require_coupled_write_allowed(n, 'voltage')
-        if current is not None:
-            self._require_coupled_write_allowed(n, 'current')
+        if voltage is not None or current is not None:
+            mode = self._fresh_track(n)
+            if voltage is not None:
+                self._require_coupled_write_allowed(n, 'voltage', mode)
+            if current is not None:
+                self._require_coupled_write_allowed(n, 'current', mode)
         steps: list[tuple[str, Any, Callable[[Any], None]]] = [
             ('ovp', ovp, lambda x: self.set_ovp(n, x)),
             ('ocp', ocp, lambda x: self.set_ocp(n, x)),

@@ -367,6 +367,7 @@ def test_writing_ch2_in_a_coupled_mode_is_the_combined_value_and_ch3_follows() -
 
 
 def test_coupled_keywords_are_combined_too() -> None:
+    # ASSUMPTION(hw): MINimum and DEFault were not tried in a coupled mode (MAXimum was).
     fake = FakeSpdResource()
     fake.write('OUTPut:TRACK SERIES')
     fake.write('VOLTage CH2,10')

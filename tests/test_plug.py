@@ -530,13 +530,48 @@ def test_guard_ch1_and_ch4_do_not_query_the_track_mode() -> None:
     assert 'OUTPut:TRACK?' not in fake.log
 
 
-def test_guard_reads_the_track_mode_once_for_ch2_and_ch3() -> None:
+def test_ch2_and_ch3_setters_read_the_track_mode_fresh_before_writing() -> None:
+    # The cached mode can be stale (panel, second client), so every CH2/CH3 voltage or current
+    # setter asks the instrument once, before anything is written; CH1 and CH4 never ask.
     plug, fake = _plug()
     plug.set_voltage(2, 5)
     plug.set_voltage(3, 5)
     plug.set_current(2, 1)
-    assert fake.log.count('OUTPut:TRACK?') == 1
+    plug.set_voltage(1, 1)
+    plug.set_current(4, 1)
+    assert fake.log.count('OUTPut:TRACK?') == 3
     assert fake.log.index('OUTPut:TRACK?') < fake.log.index(':SOURce:VOLTage:SET CH2,5')
+
+
+def test_a_stale_cached_track_mode_neither_widens_the_guard_nor_lets_a_write_through() -> None:
+    plug, fake = _plug()
+    plug.set_track(TrackMode.SERIES)  # the plug caches SERIES
+    fake.track = 0  # changed from the panel behind the plug's back
+    start = len(fake.log)
+    with pytest.raises(ValueError, match='32 V rating'):  # not the 60 V series rating
+        plug.set_voltage(2, 40)
+    assert not [c for c in _new(fake, start) if '?' not in c]
+    fake.track = 2  # and the other way round: the instrument is in PARALLEL now
+    with pytest.raises(RuntimeError, match='question 21'):
+        plug.set_voltage(2, 5)
+    assert not [c for c in _new(fake, start) if '?' not in c]
+
+
+@pytest.mark.parametrize('model', ['SPD4306X', 'SPD4121X', 'SPD9999X'])
+def test_the_combined_ch2_write_is_refused_on_models_not_tested_on_hardware(model: str) -> None:
+    fake = FakeSpdResource(model=model if model != 'SPD9999X' else 'SPD4323X')
+    if model == 'SPD9999X':
+        fake.model = model
+    plug, _ = _plug(fake=fake)
+    plug.set_track(TrackMode.SERIES)
+    plug.set_track(TrackMode.PARALLEL)
+    start = len(fake.log)
+    with pytest.raises(RuntimeError, match='question 21'):
+        plug.set_current(2, 1)
+    plug.set_track(TrackMode.SERIES)
+    with pytest.raises(RuntimeError, match='question 21'):
+        plug.set_voltage(2, 5)
+    assert not [c for c in _new(fake, start) if '?' not in c and 'TRACK' not in c]
 
 
 def test_guard_stays_at_the_rating_although_the_instrument_accepts_one_percent_more() -> None:
@@ -648,7 +683,11 @@ def test_ch2_voltage_in_series_is_the_combined_value() -> None:
     plug.set_track(TrackMode.SERIES)
     start = len(fake.log)
     plug.set_voltage(2, 20)
-    assert _new(fake, start) == [':SOURce:VOLTage:SET CH2,20', ':SOURce:VOLTage:SET? CH2']
+    assert _new(fake, start) == [
+        'OUTPut:TRACK?',
+        ':SOURce:VOLTage:SET CH2,20',
+        ':SOURce:VOLTage:SET? CH2',
+    ]
     assert plug.voltage_setpoint(2) == 20
     assert plug.voltage_setpoint(3) == 10  # CH3 follows with half
     plug.configure_channel(2, voltage=5, ovp=30)
@@ -1273,6 +1312,7 @@ def test_restore_in_a_coupled_mode_writes_only_the_verified_ch2_quantity(
     series = mode is TrackMode.SERIES
     snap['channels'][2]['voltage'] = 7.0
     snap['channels'][2]['current'] = 1.0
+    snap['channels'][3]['voltage'] = 1.0
     snap['channels'][3]['current'] = 1.0
     snap['channels'][3]['ovp'] = 20.0
     start = len(fake.log)
@@ -1299,6 +1339,25 @@ def test_restore_in_a_coupled_mode_writes_only_the_verified_ch2_quantity(
     ]
     assert fake.channels[2].voltage == (3.5 if series else 0)
     assert fake.channels[2].current == (0 if series else 0.5)
+
+
+def test_restore_in_a_coupled_mode_reports_only_items_that_differ() -> None:
+    plug, fake = _plug()
+    plug.set_track(TrackMode.SERIES)
+    plug.restore(plug.snapshot())  # everything equals the live state: nothing to skip, no error
+
+
+def test_restore_leaves_ch2_alone_while_ch3_is_on_in_a_coupled_mode() -> None:
+    plug, fake = _plug()
+    plug.set_track(TrackMode.SERIES)
+    snap = plug.snapshot()
+    snap['channels'][2]['voltage'] = 7.0
+    plug.set_output(3, True)
+    start = len(fake.log)
+    with pytest.raises(RuntimeError, match='CH3 follows CH2'):
+        plug.restore(snap)
+    assert not [c for c in _new(fake, start) if c.startswith(':SOURce:VOLTage:SET CH2')]
+    assert fake.channels[3].output  # never touched
 
 
 def test_restore_never_turns_an_output_on() -> None:

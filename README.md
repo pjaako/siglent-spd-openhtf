@@ -58,7 +58,10 @@ warning and only the read-back after each setter protects against out-of-range v
   other voltage/current write on CH2 or CH3 in a coupled mode (CH3, the current of CH2 in
   SERIES, the voltage of CH2 in PARALLEL), also through `configure_channel`, raises
   `RuntimeError` naming open question 21 before anything is sent, because it was never tried on
-  hardware; `restore()` skips those items and reports them.
+  hardware; `restore()` skips those items and reports the ones that differ. The two allowed
+  writes need a model marked `tested` (the SPD4323X; an unknown model or an untested one
+  refuses them too), and every CH2/CH3 voltage or current setter reads `OUTPut:TRACK?` fresh
+  first, since the track mode can be changed from the panel behind the plug's back.
 - **`set_track()` changes CH3.** Entering SERIES or PARALLEL copies CH2's voltage and current
   setpoints into CH3, and CH3 keeps them after going back to INDEPENDENT. `set_track()` reads
   CH3's setpoints before and after and logs a warning naming both values when they changed.

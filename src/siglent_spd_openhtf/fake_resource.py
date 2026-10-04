@@ -487,7 +487,9 @@ class FakeSpdResource:
             # run 2, Q21): in SERIES a voltage written to CH2 (in PARALLEL a current) is the
             # combined value: CH2 reads it back unchanged, each half stores half of it and CH3
             # follows CH2. The MAXimum keyword is per channel (32.32 V resp. 3.232 A, taken as
-            # the combined value). Both halves keep the value after returning to INDEPENDENT.
+            # the combined value); MINimum and DEFault are assumed to be combined as well
+            # (ASSUMPTION(hw): not tried). Both halves keep the value after returning to
+            # INDEPENDENT.
             # OVP and OCP stay per channel. Not tried: writes to CH3 in a coupled mode, the
             # current of CH2 in SERIES and the voltage of CH2 in PARALLEL (stored per channel
             # here).
