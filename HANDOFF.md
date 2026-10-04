@@ -20,6 +20,7 @@ Status for a cold agent. Keep this current at every commit.
 - Nothing. Next: hardware acceptance (below), then phase 2 candidates.
 
 ## Blocked on hardware
+- 2026-10-04 Cloud session network check: a direct TCP connection from the cloud container to a non-HTTP port (5025) times out; only proxied HTTP(S) leaves the container. Hardware acceptance therefore runs on a machine on the supply's LAN (or one that can reach the forwarded port) following `docs/acceptance.md`, not from the cloud session.
 - Hardware acceptance of phase 1 (nothing has run on a real supply yet): all `# ASSUMPTION(hw)` items (`grep -rn "ASSUMPTION(hw)" src`) and `docs/scpi_reference.md` section 8, in particular questions 20-22 (channel addressing with optional nodes, series/parallel setpoint meaning, OFF-delay semantics). The user will forward TCP port 5025 of the SPD4323X to the session on request.
 
 ## Out of scope for now
