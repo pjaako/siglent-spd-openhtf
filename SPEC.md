@@ -223,8 +223,8 @@ No `pyvisa` import. Constructor:
 - Parsing: strip the optional leading `:` and optional `SOURce:`/`SOUR:`
   prefix, accept long and short forms of every keyword used by the plug
   (`VOLTage`/`VOLT`, `CURRent`/`CURR`, `OUTPut`/`OUTP`, `MEASure`/`MEAS`,
-  `PROTect`/`PROT`, `STATe`/`STAT`, `DELay`/`DEL`, `RESet`?? - **no**: the
-  manual prints `RESET:PROTect`; accept `RESET` only), case-insensitively.
+  `PROTect`/`PROT`, `STATe`/`STAT`, `DELay`/`DEL`; the manual prints
+  `RESET:PROTect` with no short form, so accept `RESET` only), case-insensitively.
   Channel parameter `CH1`..`CH4`; `CH5` or a missing channel queues nothing and
   the query raises `FakeTimeout` (subclass of `Exception`) to mimic an
   instrument that never answers. An unknown header behaves the same way on
