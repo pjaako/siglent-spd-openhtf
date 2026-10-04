@@ -32,6 +32,9 @@ class FakeChannel:
     off_delay: float = 0.0
     ovp_tripped: bool = False
     ocp_tripped: bool = False
+    # Seconds left of a delayed switch-off, None when none is pending. While it is pending the
+    # channel still reports output 1 and still delivers power.
+    off_remaining: float | None = None
 
 
 # Long and short keyword forms -> canonical short form. The manual prints POWER, RESET,
@@ -116,12 +119,24 @@ class FakeSpdResource:
         state = self.channels[int(ch)]
         state.ovp_tripped = True
         state.output = False
+        state.off_remaining = None
 
     def trip_ocp(self, ch: int) -> None:
         """Put a channel into the OCP-tripped state (output off)."""
         state = self.channels[int(ch)]
         state.ocp_tripped = True
         state.output = False
+        state.off_remaining = None
+
+    def advance(self, seconds: float) -> None:
+        """Let time pass: channels with a pending delayed switch-off count down and turn off."""
+        for state in self.channels.values():
+            if state.off_remaining is None:
+                continue
+            state.off_remaining -= seconds
+            if state.off_remaining <= 0:
+                state.output = False
+                state.off_remaining = None
 
     # ---- VISA resource interface --------------------------------------------------------
 
@@ -215,6 +230,8 @@ class FakeSpdResource:
     # ---- limits and measurement model ---------------------------------------------------
 
     def _rating(self, ch: int) -> tuple[float, float]:
+        # ASSUMPTION(hw): series/parallel setpoint is the combined value on CH2. The rating of
+        # CH2 and CH3 follows the track mode (series voltage, parallel current).
         if ch in (2, 3):
             if self.track == 1:
                 return self._spec.series
@@ -223,10 +240,11 @@ class FakeSpdResource:
         return self._spec.channels[ch - 1]
 
     @staticmethod
-    def _clamp(value: float, upper: float) -> float:
-        # ASSUMPTION(hw): clamping. A value above the rating is clamped to the rating and a
-        # negative value to 0 without any error, so that a plug without read-back would pass.
-        return min(max(value, 0.0), upper)
+    def _clamp(value: float, upper: float, lower: float = 0.0) -> float:
+        # ASSUMPTION(hw): clamping. A voltage/current above the rating is clamped to the
+        # rating and a negative one to 0; OVP/OCP are clamped to the panel range 0.1x..1.1x
+        # rating. No error is reported, so that a plug without read-back would silently pass.
+        return min(max(value, lower), upper)
 
     def _measure(self, ch: int) -> tuple[float, float, str]:
         state = self.channels[ch]
@@ -247,12 +265,14 @@ class FakeSpdResource:
             if not state.output:
                 continue
             volts, amps, _ = self._measure(ch)
-            if state.ocp_enabled and amps > 0 and amps >= state.ocp:
+            if state.ocp_enabled and amps >= state.ocp:
                 state.ocp_tripped = True  # the OCP delay is ignored
                 state.output = False
+                state.off_remaining = None
             elif volts > state.ovp:
                 state.ovp_tripped = True
                 state.output = False
+                state.off_remaining = None
 
     # ---- command execution --------------------------------------------------------------
 
@@ -274,7 +294,7 @@ class FakeSpdResource:
             flag = _BOOL_WORDS.get(args[0].upper()) if args else None
             if flag is not None:
                 for state in self.channels.values():
-                    state.output = flag
+                    self._set_output(state, flag)
             return
         ch = self._channel(args[0] if args else None)
         if ch is None:
@@ -295,7 +315,7 @@ class FakeSpdResource:
             if flag is None:
                 return
             if keys == ('OUTP',):
-                state.output = flag
+                self._set_output(state, flag)
             else:
                 state.ocp_enabled = flag
         else:
@@ -308,15 +328,30 @@ class FakeSpdResource:
             elif keys == ('CURR',):
                 state.current = self._clamp(number, amp_max)
             elif keys == ('OVP',):
-                state.ovp = self._clamp(number, volt_max)
+                state.ovp = self._clamp(number, 1.1 * volt_max, 0.1 * volt_max)
             elif keys == ('OCP',):
-                state.ocp = self._clamp(number, amp_max)
+                state.ocp = self._clamp(number, 1.1 * amp_max, 0.1 * amp_max)
             elif keys == ('OCP', 'DEL'):
                 state.ocp_delay = max(number, 0.0)
             elif keys == ('OUTP', 'ON', 'DEL'):
                 state.on_delay = max(number, 0.0)
             elif keys == ('OUTP', 'OFF', 'DEL'):
                 state.off_delay = max(number, 0.0)
+
+    @staticmethod
+    def _set_output(state: FakeChannel, on: bool) -> None:
+        # ASSUMPTION(hw): OUTPut? during OFF delay. Switching an output off that has a
+        # non-zero OFF delay leaves it on (OUTPut? keeps answering 1 and it keeps delivering
+        # power) until the delay has elapsed; advance() lets the time pass. Switching on again
+        # cancels the pending switch-off. The delay is read when the command arrives.
+        if on:
+            state.output = True
+            state.off_remaining = None
+        elif state.output and state.off_delay > 0:
+            state.off_remaining = state.off_delay
+        else:
+            state.output = False
+            state.off_remaining = None
 
     def _do_query(self, message: str, keys: tuple[str, ...], args: list[str]) -> str:
         if keys == ('*IDN',):

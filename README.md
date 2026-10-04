@@ -16,21 +16,25 @@ def power_up(test, psu):
 ```
 
 Every setter reads its value back and raises `RuntimeError` if the supply did not take
-it (the manual defines no error query). When the test ends, `tearDown()` turns all
+it (the manual defines no error query). Boolean arguments must be `True`/`False` or the
+ints `0`/`1`; anything else (for example the string `'off'`) raises `ValueError` before
+anything is sent. When the test ends, `tearDown()` turns all
 outputs off, hands the front panel back and closes the connection. See
 `example_test.py` for a complete test.
 
 ## Supported models
 
-**Only the SPD4323X has been tested.** The other two models of the family are accepted
-using the rating table from the manual (`docs/scpi_reference.md` section 6), but nothing
-about them has been verified on hardware.
+The **SPD4323X is the target** of this plug. **Hardware acceptance is pending**: nothing in
+this repository has been run against a real supply yet, on any model, so no model is
+marked "tested" (that changes only after `docs/acceptance.md` has been run). The other two
+models of the family are accepted using the rating table from the manual
+(`docs/scpi_reference.md` section 6).
 
-| Model | CH1 | CH2 / CH3 | CH4 | CH2+CH3 series | CH2+CH3 parallel | Power | Tested |
+| Model | CH1 | CH2 / CH3 | CH4 | CH2+CH3 series | CH2+CH3 parallel | Power | Hardware acceptance |
 |---|---|---|---|---|---|---|---|
-| SPD4323X | 6 V / 3.2 A | 32 V / 3.2 A | 6 V / 3.2 A | 60 V / 3.2 A | 32 V / 6.4 A | 240 W | yes |
-| SPD4121X | 15 V / 1.5 A | 12 V / 10 A | 15 V / 1.5 A | 24 V / 10 A | 12 V / 20 A | 285 W | no |
-| SPD4306X | 15 V / 1.5 A | 30 V / 6 A | 15 V / 1 A (as printed) | 60 V / 6 A | 30 V / 12 A | 400 W | no |
+| SPD4323X | 6 V / 3.2 A | 32 V / 3.2 A | 6 V / 3.2 A | 60 V / 3.2 A | 32 V / 6.4 A | 240 W | pending (target) |
+| SPD4121X | 15 V / 1.5 A | 12 V / 10 A | 15 V / 1.5 A | 24 V / 10 A | 12 V / 20 A | 285 W | not started |
+| SPD4306X | 15 V / 1.5 A | 30 V / 6 A | 15 V / 1 A (as printed) | 60 V / 6 A | 30 V / 12 A | 400 W | not started |
 
 The SPD4306X CH4 rating is printed as 15 V / 1 A in the manual, while CH1 of the same
 model is 15 V / 1.5 A; it is kept as printed. With an unknown model the plug logs a
@@ -51,12 +55,14 @@ newer works; development is on 3.13.
 ## Connecting
 
 The plug uses PyVISA with the `pyvisa-py` (`@py`) backend; there is no custom transport.
+The manual documents only the raw socket on port 5025; the other two transports below are
+**unverified** until hardware acceptance has run.
 
-| Transport | Resource name |
-|---|---|
-| USB (USBTMC) | `USB0::...::INSTR`; leave the resource empty to pick the first USB instrument whose `*IDN?` names an SPD4xxx |
-| LAN, VXI-11 | `TCPIP::192.0.2.10::INSTR` |
-| LAN, raw socket | `TCPIP::192.0.2.10::5025::SOCKET` (port 5025 is the one named in the manual) |
+| Transport | Resource name | Status |
+|---|---|---|
+| LAN, raw socket | `TCPIP::192.0.2.10::5025::SOCKET` | port 5025 is the one named in the manual |
+| LAN, VXI-11 | `TCPIP::192.0.2.10::INSTR` | unverified: the manual does not mention VXI-11 |
+| USB (USBTMC) | `USB0::...::INSTR`; leave the resource empty to pick the first USB instrument whose `*IDN?` names an SPD4xxx | unverified: the manual does not mention USBTMC or give a vendor id |
 
 The addresses are documentation examples (RFC 5737). Choose the resource with the CONF
 key `siglent_spd_resource` (set it after importing the plug module):
@@ -74,11 +80,15 @@ or `python example_test.py --resource TCPIP::192.0.2.10::INSTR`.
 |---|---|---|
 | `siglent_spd_resource` | `''` | VISA resource name; empty = first USB instrument whose `*IDN?` names an SPD4xxx |
 | `siglent_spd_outputs_off_on_teardown` | `True` | turn all outputs off in `tearDown()` |
-| `siglent_spd_restore_state` | `False` | capture setpoints and protection values at connect and write them back in `tearDown()`; never re-enables outputs |
+| `siglent_spd_restore_state` | `False` | capture setpoints, protection values and ON/OFF delays at connect and write them back in `tearDown()`; never re-enables outputs, and skips a channel whose output is on |
 
-`tearDown()` runs these steps in order: all outputs off (if enabled), restore the
-captured state (if enabled), unlock the front panel, close the connection. A failing step
-is logged as a warning and never stops the next one. The plug never turns an output on in
+`tearDown()` runs these steps in order: all outputs off (if enabled; a non-zero OFF delay
+of a channel that is on is first set to 0 with a warning, so the output really switches
+off), restore the captured state (if enabled; skipped after a transport error while
+switching off), unlock the front panel, close the connection. The unlock step is
+unverified (`# ASSUMPTION(hw): needed`): the manual says the panel locks itself under
+remote control but not whether it stays locked afterwards. A failing step is logged as a
+warning and never stops the next one. The plug never turns an output on in
 `tearDown()` or `restore()`, and it never sends `*RST`, `DEFAult:RESET` or `FACTory:RESET`.
 
 Each constructor argument (`resource`, `outputs_off_on_teardown`, `restore_state`)
@@ -94,7 +104,7 @@ command in `fake.log`. Nothing in the tests opens a real VISA resource.
 
 ```
 .venv/bin/pytest -q
-.venv/bin/ruff check . && .venv/bin/ruff format --check .
+.venv/bin/ruff check src tests example_test.py && .venv/bin/ruff format --check src tests example_test.py
 .venv/bin/mypy src
 .venv/bin/python example_test.py --fake
 ```

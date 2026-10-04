@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "siglent-spd-openhtf"
 version = "0.1.0"
-description = "OpenHTF plug for Siglent SPD4000X programmable DC power supplies (tested on SPD4323X)"
+description = "OpenHTF plug for Siglent SPD4000X programmable DC power supplies (target: SPD4323X, hardware acceptance pending)"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }

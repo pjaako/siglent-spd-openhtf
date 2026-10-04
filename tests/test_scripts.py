@@ -61,3 +61,17 @@ def test_resource_flag_sets_the_conf_key_and_exit_code_follows_the_outcome(
     assert run(_Passes()) == 0
     assert run(_Fails()) == 1
     assert seen == [False, False]
+
+
+def test_example_fake_plug_keeps_the_default_teardown(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.syspath_prepend(str(ROOT))
+    example = importlib.import_module('example_test')
+    plug = example.FakeSiglentSpdPlug()
+    assert plug._outputs_off_on_teardown is True
+    plug.set_output(1, False)
+    plug.configure_channel(1, voltage=3, current=0.5)
+    plug.set_output(1, True)
+    fake = plug.resource
+    plug.tearDown()
+    assert fake.channels[1].output is False  # type: ignore[attr-defined]
+    assert 'OUTPut:ALL 0' in fake.log  # type: ignore[attr-defined]

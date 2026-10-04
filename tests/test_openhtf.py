@@ -63,7 +63,7 @@ def test_openhtf_test_passes_with_the_fake_plug() -> None:
     assert test.execute(test_start=lambda: 'dut') is True
     assert len(FakePsu.instances) == 1
     log = FakePsu.instances[0].fake.log
-    assert 'VOLTage CH1,3.3' in log
+    assert ':SOURce:VOLTage:SET CH1,3.3' in log
     assert 'OUTPut CH1,1' in log
 
 
@@ -85,7 +85,7 @@ def test_openhtf_calls_teardown_which_turns_the_outputs_off_and_closes() -> None
     assert fake.channels[1].output is False
     assert fake.closed
     assert 'OUTPut:ALL 0' in fake.log
-    assert fake.log[-2:] == ['LOCK 0', 'LOCK?']
+    assert fake.log[-2:] == [':SOURce:LOCK:STATe OFF', ':SOURce:LOCK:STATe?']
 
 
 def test_openhtf_teardown_runs_after_a_failing_phase() -> None:

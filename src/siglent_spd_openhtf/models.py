@@ -20,7 +20,9 @@ class Model(NamedTuple):
     series: ChannelRating  # CH2 + CH3 in series
     parallel: ChannelRating  # CH2 + CH3 in parallel
     total_power_w: float
-    tested: bool  # True only for the SPD4323X
+    # True once hardware acceptance (docs/acceptance.md) has been run on that model. It is
+    # False for every model until then, the SPD4323X included (it is the target, not yet tested).
+    tested: bool
 
 
 MODELS: dict[str, Model] = {
@@ -35,7 +37,7 @@ MODELS: dict[str, Model] = {
         series=ChannelRating(60, 3.2),
         parallel=ChannelRating(32, 6.4),
         total_power_w=240,
-        tested=True,
+        tested=False,
     ),
     'SPD4121X': Model(
         name='SPD4121X',

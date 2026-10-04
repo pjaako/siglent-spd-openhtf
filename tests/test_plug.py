@@ -82,14 +82,16 @@ def test_init_takes_a_snapshot_only_when_restore_is_enabled() -> None:
     _, plain = _plug()
     assert plain.log == ['*IDN?']
     _, restoring = _plug(restore_state=True)
-    assert len(restoring.log) == 1 + 4 * 7 + 1
-    assert restoring.log[1:8] == [
-        'VOLTage? CH1',
-        'CURRent? CH1',
-        'OVP? CH1',
-        'OCP? CH1',
-        'OCP:STATe? CH1',
+    assert len(restoring.log) == 1 + 4 * 9 + 1
+    assert restoring.log[1:10] == [
+        ':SOURce:VOLTage:SET? CH1',
+        ':SOURce:CURRent:SET? CH1',
+        ':SOURce:OVP? CH1',
+        ':SOURce:OCP? CH1',
+        ':SOURce:OCP:STATe? CH1',
         'OCP:DELay? CH1',
+        'OUTPut:ON:DELay? CH1',
+        'OUTPut:OFF:DELay? CH1',
         'OUTPut? CH1',
     ]
     assert restoring.log[-1] == 'OUTPut:TRACK?'
@@ -265,12 +267,12 @@ def test_values_match(expected: Any, actual: str, match: bool) -> None:
 
 def test_write_verified_passes_and_fails() -> None:
     plug, fake = _plug()
-    plug.write_verified('VOLTage CH1,2', 'VOLTage? CH1', 2.0)
-    fake.reject = {'VOLTage CH1': 'x'}
+    plug.write_verified(':SOURce:VOLTage:SET CH1,2', ':SOURce:VOLTage:SET? CH1', 2.0)
+    fake.reject = {':SOURce:VOLTage:SET CH1': 'x'}
     with pytest.raises(RuntimeError) as err:
-        plug.write_verified('VOLTage CH1,3', 'VOLTage? CH1', 3.0)
+        plug.write_verified(':SOURce:VOLTage:SET CH1,3', ':SOURce:VOLTage:SET? CH1', 3.0)
     message = str(err.value)
-    assert 'VOLTage CH1,3' in message
+    assert ':SOURce:VOLTage:SET CH1,3' in message
     assert '3.0' in message
     assert '2.000000' in message
 
@@ -292,8 +294,8 @@ def test_write_verified_wraps_timeouts() -> None:
         raise Timeout('VI_ERROR_TMO')
 
     fake.query = broken  # type: ignore[method-assign]
-    with pytest.raises(RuntimeError, match='VOLTage CH2,1'):
-        plug.write_verified('VOLTage CH2,1', 'VOLTage? CH2', 1.0)
+    with pytest.raises(RuntimeError, match=':SOURce:VOLTage:SET CH2,1'):
+        plug.write_verified(':SOURce:VOLTage:SET CH2,1', ':SOURce:VOLTage:SET? CH2', 1.0)
 
 
 # ---- identity, opc ---------------------------------------------------------------------------
@@ -314,16 +316,16 @@ def test_set_voltage_and_current_commands() -> None:
     plug.set_current(1, 0.5)
     plug.set_voltage(Channel.CH4, 0.002)
     assert fake.log[1:] == [
-        'VOLTage CH1,3.3',
-        'VOLTage? CH1',
-        'CURRent CH1,0.5',
-        'CURRent? CH1',
-        'VOLTage CH4,0.002',
-        'VOLTage? CH4',
+        ':SOURce:VOLTage:SET CH1,3.3',
+        ':SOURce:VOLTage:SET? CH1',
+        ':SOURce:CURRent:SET CH1,0.5',
+        ':SOURce:CURRent:SET? CH1',
+        ':SOURce:VOLTage:SET CH4,0.002',
+        ':SOURce:VOLTage:SET? CH4',
     ]
     assert plug.voltage_setpoint(1) == pytest.approx(3.3)
     assert plug.current_setpoint(1) == pytest.approx(0.5)
-    assert fake.log[-2:] == ['VOLTage? CH1', 'CURRent? CH1']
+    assert fake.log[-2:] == [':SOURce:VOLTage:SET? CH1', ':SOURce:CURRent:SET? CH1']
 
 
 @pytest.mark.parametrize('bad', [-0.1, math.nan, math.inf])
@@ -337,8 +339,8 @@ def test_set_voltage_rejects_invalid_numbers(bad: float) -> None:
 
 
 def test_set_voltage_rejected_by_the_instrument_is_detected() -> None:
-    plug, _ = _plug(reject={'VOLTage CH1': 'ignored'})
-    with pytest.raises(RuntimeError, match='VOLTage CH1,3'):
+    plug, _ = _plug(reject={':SOURce:VOLTage:SET CH1': 'ignored'})
+    with pytest.raises(RuntimeError, match=':SOURce:VOLTage:SET CH1,3'):
         plug.set_voltage(1, 3)
 
 
@@ -347,9 +349,9 @@ def test_clamped_value_is_detected_when_the_model_is_unknown() -> None:
     fake.model = 'SPD9999X'
     plug, _ = _plug(fake=fake)
     assert plug.model is None
-    with pytest.raises(RuntimeError, match='VOLTage CH1,7'):
+    with pytest.raises(RuntimeError, match=':SOURce:VOLTage:SET CH1,7'):
         plug.set_voltage(1, 7)  # the fake clamps to the 6 V rating
-    with pytest.raises(RuntimeError, match='CURRent CH1,4'):
+    with pytest.raises(RuntimeError, match=':SOURce:CURRent:SET CH1,4'):
         plug.set_current(1, 4)
 
 
@@ -431,29 +433,29 @@ def test_configure_channel_order_and_commands() -> None:
         1, voltage=3.3, current=0.5, ovp=4, ocp=1, ocp_enabled=True, ocp_delay=0.25
     )
     assert fake.log[1:] == [
-        'OVP CH1,4',
-        'OVP? CH1',
-        'OCP CH1,1',
-        'OCP? CH1',
+        ':SOURce:OVP CH1,4',
+        ':SOURce:OVP? CH1',
+        ':SOURce:OCP CH1,1',
+        ':SOURce:OCP? CH1',
         'OCP:DELay CH1,0.25',
         'OCP:DELay? CH1',
-        'OCP:STATe CH1,1',
-        'OCP:STATe? CH1',
-        'VOLTage CH1,3.3',
-        'VOLTage? CH1',
-        'CURRent CH1,0.5',
-        'CURRent? CH1',
+        ':SOURce:OCP:STATe CH1,1',
+        ':SOURce:OCP:STATe? CH1',
+        ':SOURce:VOLTage:SET CH1,3.3',
+        ':SOURce:VOLTage:SET? CH1',
+        ':SOURce:CURRent:SET CH1,0.5',
+        ':SOURce:CURRent:SET? CH1',
     ]
 
 
 def test_configure_channel_skips_unset_items() -> None:
     plug, fake = _plug()
     plug.configure_channel(1, ocp_enabled=False)
-    assert fake.log[1:] == ['OCP:STATe CH1,0', 'OCP:STATe? CH1']
+    assert fake.log[1:] == [':SOURce:OCP:STATe CH1,0', ':SOURce:OCP:STATe? CH1']
 
 
 def test_configure_channel_attempts_everything_and_lists_failures() -> None:
-    plug, fake = _plug(reject={'OVP CH1': 'x', 'CURRent CH1': 'x'})
+    plug, fake = _plug(reject={':SOURce:OVP CH1': 'x', ':SOURce:CURRent:SET CH1': 'x'})
     with pytest.raises(RuntimeError) as err:
         plug.configure_channel(1, voltage=3, current=0.5, ovp=4, ocp=1)
     message = str(err.value)
@@ -497,7 +499,11 @@ def test_guard_rejects_values_above_the_rating_per_model(
         plug.set_voltage(ch, volts)
     with pytest.raises(ValueError, match='rating'):
         plug.set_current(ch, amps)
-    assert not [c for c in _new(fake, start) if c.startswith(('VOLTage ', 'CURRent '))]
+    assert not [
+        c
+        for c in _new(fake, start)
+        if c.startswith((':SOURce:VOLTage:SET ', ':SOURce:CURRent:SET '))
+    ]
 
 
 @pytest.mark.parametrize(
@@ -530,30 +536,62 @@ def test_guard_reads_the_track_mode_once_for_ch2_and_ch3() -> None:
     plug.set_voltage(3, 5)
     plug.set_current(2, 1)
     assert fake.log.count('OUTPut:TRACK?') == 1
-    assert fake.log.index('OUTPut:TRACK?') < fake.log.index('VOLTage CH2,5')
+    assert fake.log.index('OUTPut:TRACK?') < fake.log.index(':SOURce:VOLTage:SET CH2,5')
 
 
-def test_guard_in_series_mode_uses_the_series_rating() -> None:
-    plug, _ = _plug()
+COMBINED = [
+    # model, CH2 independent V/A, series V, parallel A
+    ('SPD4323X', 32, 3.2, 60, 6.4),
+    ('SPD4121X', 12, 10, 24, 20),
+    ('SPD4306X', 30, 6, 60, 12),
+]
+
+
+@pytest.mark.parametrize(('model', 'ind_v', 'ind_a', 'series_v', 'parallel_a'), COMBINED)
+def test_guard_in_series_mode_uses_the_series_rating(
+    model: str, ind_v: float, ind_a: float, series_v: float, parallel_a: float
+) -> None:
+    plug, fake = _plug(model)
     plug.set_track(TrackMode.SERIES)
-    plug.set_voltage(2, 60)
-    plug.set_current(2, 3.2)
-    with pytest.raises(ValueError):
-        plug.set_voltage(2, 60.5)
-    with pytest.raises(ValueError):
-        plug.set_current(2, 3.3)
-    with pytest.raises(ValueError):
-        plug.set_voltage(1, 7)  # CH1 never follows the track mode
+    plug.set_voltage(2, series_v)
+    plug.set_current(2, ind_a)
+    start = len(fake.log)
+    with pytest.raises(ValueError, match='rating'):
+        plug.set_voltage(2, series_v + 0.5)
+    with pytest.raises(ValueError, match='rating'):
+        plug.set_current(3, ind_a + 0.1)
+    with pytest.raises(ValueError, match='rating'):
+        plug.set_voltage(1, 100)  # CH1 never follows the track mode
+    assert _new(fake, start) == []
 
 
-def test_guard_in_parallel_mode_uses_the_parallel_rating() -> None:
-    plug, _ = _plug()
+@pytest.mark.parametrize(('model', 'ind_v', 'ind_a', 'series_v', 'parallel_a'), COMBINED)
+def test_guard_in_parallel_mode_uses_the_parallel_rating(
+    model: str, ind_v: float, ind_a: float, series_v: float, parallel_a: float
+) -> None:
+    plug, fake = _plug(model)
     plug.set_track(TrackMode.PARALLEL)
-    plug.set_current(2, 6.4)
-    with pytest.raises(ValueError):
-        plug.set_current(2, 6.5)
-    with pytest.raises(ValueError):
-        plug.set_voltage(2, 33)
+    plug.set_current(2, parallel_a)
+    plug.set_voltage(2, ind_v)
+    start = len(fake.log)
+    with pytest.raises(ValueError, match='rating'):
+        plug.set_current(2, parallel_a + 0.1)
+    with pytest.raises(ValueError, match='rating'):
+        plug.set_voltage(3, ind_v + 0.5)
+    assert _new(fake, start) == []
+
+
+@pytest.mark.parametrize(('model', 'ind_v', 'ind_a', 'series_v', 'parallel_a'), COMBINED)
+def test_guard_in_independent_mode_uses_the_single_channel_rating(
+    model: str, ind_v: float, ind_a: float, series_v: float, parallel_a: float
+) -> None:
+    plug, _ = _plug(model)
+    plug.set_voltage(2, ind_v)
+    plug.set_current(2, ind_a)
+    with pytest.raises(ValueError, match='rating'):
+        plug.set_voltage(2, ind_v + 0.5)
+    with pytest.raises(ValueError, match='rating'):
+        plug.set_current(2, ind_a + 0.1)
 
 
 def test_guard_follows_a_return_to_independent_mode() -> None:
@@ -574,12 +612,12 @@ def test_protection_setters_and_getters() -> None:
     plug.set_ocp_enabled(1, True)
     plug.set_ocp_delay(1, 0.5)
     assert fake.log[1:] == [
-        'OVP CH1,4',
-        'OVP? CH1',
-        'OCP CH1,1',
-        'OCP? CH1',
-        'OCP:STATe CH1,1',
-        'OCP:STATe? CH1',
+        ':SOURce:OVP CH1,4',
+        ':SOURce:OVP? CH1',
+        ':SOURce:OCP CH1,1',
+        ':SOURce:OCP? CH1',
+        ':SOURce:OCP:STATe CH1,1',
+        ':SOURce:OCP:STATe? CH1',
         'OCP:DELay CH1,0.5',
         'OCP:DELay? CH1',
     ]
@@ -587,14 +625,19 @@ def test_protection_setters_and_getters() -> None:
     assert plug.ocp(1) == pytest.approx(1)
     assert plug.ocp_enabled(1) is True
     assert plug.ocp_delay(1) == pytest.approx(0.5)
-    assert fake.log[-4:] == ['OVP? CH1', 'OCP? CH1', 'OCP:STATe? CH1', 'OCP:DELay? CH1']
+    assert fake.log[-4:] == [
+        ':SOURce:OVP? CH1',
+        ':SOURce:OCP? CH1',
+        ':SOURce:OCP:STATe? CH1',
+        'OCP:DELay? CH1',
+    ]
 
 
 def test_ovp_above_the_fake_rating_is_caught_by_read_back() -> None:
     plug, _ = _plug()
-    with pytest.raises(RuntimeError, match='OVP CH1,7'):
+    with pytest.raises(RuntimeError, match=':SOURce:OVP CH1,7'):
         plug.set_ovp(1, 7)
-    with pytest.raises(RuntimeError, match='OCP CH1,4'):
+    with pytest.raises(RuntimeError, match=':SOURce:OCP CH1,4'):
         plug.set_ocp(1, 4)
 
 
@@ -615,7 +658,7 @@ def test_ocp_delay_accepts_the_limits() -> None:
 def test_protection_status() -> None:
     plug, fake = _plug()
     assert plug.protection_status(1) == ProtectionStatus(False, False)
-    assert fake.log[-2:] == ['OVP:PROTect:STATe? CH1', 'OCP:PROTect:STATe? CH1']
+    assert fake.log[-2:] == [':SOURce:OVP:PROTect:STATe? CH1', ':SOURce:OCP:PROTect:STATe? CH1']
     fake.trip_ovp(1)
     fake.trip_ocp(2)
     assert plug.protection_status(1) == ProtectionStatus(True, False)
@@ -636,14 +679,14 @@ def test_clear_protection() -> None:
     start = len(fake.log)
     plug.clear_protection(1)
     assert _new(fake, start) == [
-        'RESET:PROTect CH1',
-        'OVP:PROTect:STATe? CH1',
-        'OCP:PROTect:STATe? CH1',
+        ':SOURce:RESET:PROTect CH1',
+        ':SOURce:OVP:PROTect:STATe? CH1',
+        ':SOURce:OCP:PROTect:STATe? CH1',
     ]
 
 
 def test_clear_protection_raises_if_still_tripped() -> None:
-    plug, fake = _plug(reject={'RESET:PROTect': 'ignored'})
+    plug, fake = _plug(reject={':SOURce:RESET:PROTect': 'ignored'})
     fake.trip_ocp(2)
     with pytest.raises(RuntimeError, match='still in protection'):
         plug.clear_protection(2)
@@ -881,13 +924,67 @@ def test_lock() -> None:
     plug.set_lock(False)
     assert plug.locked() is False
     assert fake.log[1:] == [
-        'LOCK 1',
-        'LOCK?',
-        'LOCK?',
-        'LOCK 0',
-        'LOCK?',
-        'LOCK?',
+        ':SOURce:LOCK:STATe ON',
+        ':SOURce:LOCK:STATe?',
+        ':SOURce:LOCK:STATe?',
+        ':SOURce:LOCK:STATe OFF',
+        ':SOURce:LOCK:STATe?',
+        ':SOURce:LOCK:STATe?',
     ]
+
+
+# ---- boolean arguments --------------------------------------------------------------------
+
+BAD_BOOLS = ['off', 'on', 'OFF', '0', '1', '', 2, -1, 0.0, 1.0, None, [], [0], Channel.CH1]
+
+
+@pytest.mark.parametrize('bad', BAD_BOOLS)
+def test_boolean_setters_reject_non_boolean_values_before_sending(bad: Any) -> None:
+    plug, fake = _plug()
+    calls = [
+        lambda: plug.set_output(1, bad),
+        lambda: plug.set_all_outputs(bad),
+        lambda: plug.set_ocp_enabled(1, bad),
+        lambda: plug.set_lock(bad),
+    ]
+    if bad is not None:  # configure_channel(ocp_enabled=None) means "leave it alone"
+        calls.append(lambda: plug.configure_channel(1, voltage=1, ocp_enabled=bad))
+    for call in calls:
+        with pytest.raises(ValueError):
+            call()
+    assert fake.log == ['*IDN?']
+    assert not any(c.output for c in fake.channels.values())
+
+
+def test_string_off_does_not_turn_an_output_on() -> None:
+    # Regression: set_output(1, 'off') used to be bool('off') -> True -> OUTPut CH1,1.
+    plug, fake = _plug()
+    with pytest.raises(ValueError):
+        plug.set_output(1, 'off')  # type: ignore[arg-type]
+    assert fake.channels[1].output is False
+    assert 'OUTPut CH1,1' not in fake.log
+
+
+@pytest.mark.parametrize(('value', 'expected'), [(True, 1), (False, 0), (1, 1), (0, 0)])
+def test_boolean_setters_accept_bools_and_the_ints_0_and_1(value: Any, expected: int) -> None:
+    plug, fake = _plug()
+    plug.set_output(1, value)
+    plug.set_ocp_enabled(1, value)
+    plug.set_all_outputs(value)
+    plug.set_lock(value)
+    plug.configure_channel(2, ocp_enabled=value)
+    assert f'OUTPut CH1,{expected}' in fake.log
+    assert f':SOURce:OCP:STATe CH1,{expected}' in fake.log
+    assert f'OUTPut:ALL {expected}' in fake.log
+    assert f':SOURce:LOCK:STATe {"ON" if expected else "OFF"}' in fake.log
+    assert f':SOURce:OCP:STATe CH2,{expected}' in fake.log
+
+
+def test_configure_channel_validates_the_boolean_before_applying_anything() -> None:
+    plug, fake = _plug()
+    with pytest.raises(ValueError, match='ocp_enabled'):
+        plug.configure_channel(1, ovp=4, voltage=3, ocp_enabled='off')  # type: ignore[arg-type]
+    assert fake.log == ['*IDN?']
 
 
 # ---- snapshot and restore -------------------------------------------------------------------
@@ -896,6 +993,7 @@ def test_lock() -> None:
 def test_snapshot_contents() -> None:
     plug, fake = _plug()
     plug.configure_channel(1, voltage=3, current=0.5, ovp=4, ocp=1, ocp_enabled=True, ocp_delay=2)
+    plug.set_output_delay(1, on_s=3, off_s=1.5)
     snap = plug.snapshot()
     assert snap['track'] is TrackMode.INDEPENDENT
     assert snap['channels'][1] == {
@@ -905,6 +1003,8 @@ def test_snapshot_contents() -> None:
         'ocp': 1.0,
         'ocp_enabled': True,
         'ocp_delay': 2.0,
+        'on_delay': 3.0,
+        'off_delay': 1.5,
         'output': False,
     }
     assert set(snap['channels']) == set(ALL)
@@ -913,31 +1013,42 @@ def test_snapshot_contents() -> None:
 def test_restore_writes_values_back_in_order() -> None:
     plug, fake = _plug()
     plug.configure_channel(1, voltage=3, current=0.5, ovp=4, ocp=1, ocp_enabled=True, ocp_delay=2)
+    plug.set_output_delay(1, on_s=3, off_s=1.5)
     snap = plug.snapshot()
     plug.configure_channel(1, voltage=1, current=0.1, ovp=5, ocp=2, ocp_enabled=False, ocp_delay=0)
+    plug.set_output_delay(1, on_s=0, off_s=0)
     start = len(fake.log)
     plug.restore(snap)
     ch1 = [c for c in _new(fake, start) if c.endswith('CH1') or 'CH1,' in c]
     assert [c for c in ch1 if '?' not in c] == [
-        'OVP CH1,4',
-        'OCP CH1,1',
+        ':SOURce:OVP CH1,4',
+        ':SOURce:OCP CH1,1',
         'OCP:DELay CH1,2',
-        'OCP:STATe CH1,1',
-        'VOLTage CH1,3',
-        'CURRent CH1,0.5',
+        ':SOURce:OCP:STATe CH1,1',
+        'OUTPut:ON:DELay CH1,3',
+        'OUTPut:OFF:DELay CH1,1.5',
+        ':SOURce:VOLTage:SET CH1,3',
+        ':SOURce:CURRent:SET CH1,0.5',
     ]
     assert (fake.channels[1].voltage, fake.channels[1].ocp_enabled) == (3, True)
+    assert (fake.channels[1].on_delay, fake.channels[1].off_delay) == (3, 1.5)
 
 
-def test_restore_restores_the_track_mode_first() -> None:
+def test_restore_writes_the_track_mode_first_and_only_if_it_differs() -> None:
     plug, fake = _plug()
     snap = plug.snapshot()
+    start = len(fake.log)
+    plug.restore(snap)  # same track mode: no track write
+    assert not any(c.startswith('OUTPut:TRACK ') for c in _new(fake, start))
     plug.set_track(TrackMode.SERIES)
     start = len(fake.log)
     plug.restore(snap)
+    new = _new(fake, start)
     assert fake.track == 0
-    assert _new(fake, start)[:1] == ['OUTPut:TRACK?']
-    assert 'OUTPut:TRACK INDEPENDENT' in _new(fake, start)
+    assert new[0] == 'OUTPut:TRACK?'
+    track_write = new.index('OUTPut:TRACK INDEPENDENT')
+    first_setpoint = min(i for i, c in enumerate(new) if c.startswith(':SOURce:'))
+    assert track_write < first_setpoint
 
 
 def test_restore_never_turns_an_output_on() -> None:
@@ -950,9 +1061,67 @@ def test_restore_never_turns_an_output_on() -> None:
         plug.set_output(n, False)
     start = len(fake.log)
     plug.restore(snap)
-    assert not [c for c in _new(fake, start) if c.startswith('OUTPut')][1:]
     assert not any(c.output for c in fake.channels.values())
-    assert not any(c.startswith(('OUTPut CH', 'OUTPut:ALL')) for c in _new(fake, start))
+    writes = [c for c in _new(fake, start) if '?' not in c]
+    assert not [c for c in writes if c.startswith(('OUTPut CH', 'OUTPut:ALL'))]
+
+
+def test_restore_skips_a_channel_whose_output_is_on_and_names_it() -> None:
+    plug, fake = _plug()
+    plug.configure_channel(2, voltage=3, current=0.5)
+    snap = plug.snapshot()
+    plug.configure_channel(2, voltage=7, current=1)
+    plug.configure_channel(1, voltage=2)
+    plug.set_output(2, True)
+    start = len(fake.log)
+    with pytest.raises(RuntimeError) as err:
+        plug.restore(snap)
+    assert 'CH2' in str(err.value)
+    assert 'output is on' in str(err.value)
+    assert 'CH1' not in str(err.value)
+    new = _new(fake, start)
+    assert not [c for c in new if ' CH2' in c and '?' not in c]  # nothing written to CH2
+    assert (fake.channels[2].voltage, fake.channels[2].current) == (7, 1)
+    assert fake.channels[1].voltage == 0  # the other channels were restored
+    assert fake.channels[2].output is True
+
+
+def test_restore_skips_ch2_and_ch3_when_the_track_restore_is_refused() -> None:
+    plug, fake = _plug()
+    snap = plug.snapshot()
+    plug.set_track(TrackMode.SERIES)
+    plug.configure_channel(2, voltage=40)
+    plug.configure_channel(3, voltage=1)
+    plug.configure_channel(1, voltage=2)
+    fake.reject = {'OUTPut:TRACK': 'refused'}
+    start = len(fake.log)
+    with pytest.raises(RuntimeError) as err:
+        plug.restore(snap)
+    message = str(err.value)
+    assert 'track' in message
+    assert 'CH2' in message
+    assert 'CH3' in message
+    assert 'CH1' not in message.split('skipped channels')[-1]
+    new = _new(fake, start)
+    assert not [c for c in new if (' CH2' in c or ' CH3' in c) and '?' not in c]
+    assert (fake.channels[2].voltage, fake.channels[3].voltage) == (40, 1)
+    assert fake.channels[1].voltage == 0  # CH1 and CH4 do not depend on the track mode
+
+
+def test_restore_skips_ch2_and_ch3_when_the_track_query_fails() -> None:
+    plug, fake = _plug()
+    snap = plug.snapshot()
+    real_query = fake.query
+
+    def broken(message: str) -> str:
+        if message == 'OUTPut:TRACK?':
+            raise OSError('timeout')
+        return real_query(message)
+
+    fake.query = broken  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match='CH2 .*CH3') as err:
+        plug.restore(snap)
+    assert 'timeout' in str(err.value)
 
 
 def test_restore_collects_every_failure() -> None:
@@ -961,12 +1130,13 @@ def test_restore_collects_every_failure() -> None:
     snap['channels'][1]['voltage'] = 3.0
     snap['channels'][2]['ovp'] = 5.0
     snap['channels'][3]['ocp_delay'] = 4.0
-    fake.reject = {'VOLTage CH1': 'x', 'OVP CH2': 'x'}
+    fake.reject = {':SOURce:VOLTage:SET CH1': 'x', ':SOURce:OVP CH2': 'x'}
     with pytest.raises(RuntimeError) as err:
         plug.restore(snap)
     message = str(err.value)
     assert 'CH1 voltage' in message
     assert 'CH2 OVP' in message
+    assert 'skipped' not in message
     assert fake.channels[3].ocp_delay == 4.0  # later items were still attempted
 
 
@@ -981,10 +1151,11 @@ def test_teardown_turns_outputs_off_unlocks_and_closes() -> None:
     start = len(fake.log)
     plug.tearDown()
     assert _new(fake, start) == [
+        *(c for n in ALL for c in (f'OUTPut? CH{n}', f'OUTPut:OFF:DELay? CH{n}')),
         'OUTPut:ALL 0',
         *(f'OUTPut? CH{n}' for n in ALL),
-        'LOCK 0',
-        'LOCK?',
+        ':SOURce:LOCK:STATe OFF',
+        ':SOURce:LOCK:STATe?',
     ]
     assert not any(c.output for c in fake.channels.values())
     assert fake.lock == 0
@@ -997,15 +1168,26 @@ def test_teardown_without_outputs_off_still_unlocks_and_closes() -> None:
     plug.tearDown()
     assert fake.channels[1].output is True
     assert 'OUTPut:ALL 0' not in fake.log
-    assert fake.log[-2:] == ['LOCK 0', 'LOCK?']
+    assert fake.log[-2:] == [':SOURce:LOCK:STATe OFF', ':SOURce:LOCK:STATe?']
     assert fake.closed
 
 
 def test_teardown_never_enables_an_output() -> None:
-    plug, fake = _plug(teardown_off=True, restore_state=True)
+    # Outputs are on before the snapshot, so a restore that wrote the snapshot's output state
+    # back would send OUTPut CHn,1; the assertion below would catch it.
+    fake = FakeSpdResource()
+    for n in ALL:
+        fake.channels[n].output = True
+    plug, _ = _plug(fake=fake, teardown_off=True, restore_state=True)
+    assert plug._snapshot is not None
+    assert all(plug._snapshot['channels'][n]['output'] for n in ALL)
+    start = len(fake.log)
     plug.tearDown()
-    enabling = [c for c in fake.log if c in ('OUTPut:ALL 1', 'OUTPut:ALL ON') or c.endswith(',1')]
-    assert not [c for c in enabling if c.startswith('OUTPut')]
+    sent = _new(fake, start)
+    assert 'OUTPut:ALL 0' in sent
+    assert not [c for c in sent if c.startswith(('OUTPut CH', 'OUTPut:ALL')) and c.endswith('1')]
+    assert not [c for c in sent if c.startswith(('OUTPut CH', 'OUTPut:ALL')) and c.endswith('ON')]
+    assert not any(c.output for c in fake.channels.values())
 
 
 def test_teardown_falls_back_to_per_channel_off() -> None:
@@ -1015,7 +1197,7 @@ def test_teardown_falls_back_to_per_channel_off() -> None:
     plug.tearDown()
     assert not any(c.output for c in fake.channels.values())
     assert 'OUTPut CH1,0' in fake.log
-    assert fake.log[-2:] == ['LOCK 0', 'LOCK?']
+    assert fake.log[-2:] == [':SOURce:LOCK:STATe OFF', ':SOURce:LOCK:STATe?']
     assert fake.closed
 
 
@@ -1025,14 +1207,82 @@ def test_teardown_continues_after_every_failing_step(caplog: pytest.LogCaptureFi
     plug.set_lock(True)
     assert plug._snapshot is not None
     plug._snapshot['channels'][2]['ovp'] = 5.0
-    fake.reject = {'OUTPut': 'x', 'OVP': 'x', 'LOCK': 'x'}
+    fake.reject = {'OUTPut': 'x', ':SOURce:OVP': 'x', ':SOURce:LOCK': 'x'}
     with caplog.at_level(logging.WARNING):
         plug.tearDown()
     assert fake.closed
-    assert 'LOCK 0' in fake.log  # the unlock was attempted after the failing steps
-    assert "teardown step 'outputs off'" in caplog.text or 'OUTPut:ALL 0 failed' in caplog.text
+    assert ':SOURce:LOCK:STATe OFF' in fake.log  # the unlock was attempted after the failing steps
+    assert 'teardown: OUTPut:ALL 0 failed' in caplog.text
     assert "teardown step 'restore state' failed" in caplog.text
     assert "teardown step 'unlock front panel' failed" in caplog.text
+
+
+def test_teardown_zeroes_an_off_delay_before_switching_off(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    plug, fake = _plug(teardown_off=True)
+    plug.configure_channel(1, voltage=3, current=0.5)
+    plug.set_output_delay(1, off_s=2)
+    plug.set_output_delay(2, off_s=4)  # CH2 is off: its delay is none of the teardown's business
+    plug.set_output(1, True)
+    start = len(fake.log)
+    with caplog.at_level(logging.WARNING):
+        plug.tearDown()
+    sent = _new(fake, start)
+    assert sent.index('OUTPut:OFF:DELay CH1,0') < sent.index('OUTPut:ALL 0')
+    assert 'OUTPut:OFF:DELay CH2,0' not in sent
+    assert fake.channels[1].off_delay == 0
+    assert fake.channels[2].off_delay == 4
+    assert fake.channels[1].output is False  # really off, not "off after the delay"
+    assert fake.channels[1].off_remaining is None
+    assert 'CH1 has an OFF delay of 2 s' in caplog.text
+
+
+def test_a_delayed_switch_off_would_leave_the_output_on_without_the_zeroing() -> None:
+    # Documents what the fake does and why the teardown has to zero the delay first.
+    fake = FakeSpdResource()
+    plug, _ = _plug(fake=fake, teardown_off=False)
+    plug.set_output(1, True)
+    plug.set_output_delay(1, off_s=2)
+    plug.write('OUTPut:ALL 0')
+    assert plug.output(1) is True
+    fake.advance(2)
+    assert plug.output(1) is False
+
+
+def test_teardown_skips_the_restore_after_a_transport_error(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    plug, fake = _plug(teardown_off=True, restore_state=True)
+    plug.configure_channel(1, voltage=3)
+    real_query = fake.query
+
+    def broken(message: str) -> str:
+        if message.startswith('OUTPut'):
+            raise OSError('VI_ERROR_TMO')
+        return real_query(message)
+
+    fake.query = broken  # type: ignore[method-assign]
+    start = len(fake.log)
+    with caplog.at_level(logging.WARNING):
+        plug.tearDown()
+    sent = _new(fake, start)
+    assert 'OUTPut:ALL 0' in sent
+    assert 'OUTPut CH1,0' in sent  # the per-channel fallback was still tried
+    assert fake.channels[1].voltage == 3  # restore did not run
+    assert not [c for c in sent if c.startswith(':SOURce:OVP ')]
+    assert 'restore state skipped' in caplog.text
+    assert 'VI_ERROR_TMO' in caplog.text
+    assert ':SOURce:LOCK:STATe OFF' in sent  # the unlock still ran
+    assert fake.closed
+
+
+def test_teardown_still_restores_after_a_read_back_mismatch() -> None:
+    # A refused write is not a transport error: the link works, so the restore runs.
+    plug, fake = _plug(teardown_off=True, restore_state=True, reject={'OUTPut:ALL': 'x'})
+    plug.configure_channel(1, voltage=3)
+    plug.tearDown()
+    assert fake.channels[1].voltage == 0
 
 
 def test_teardown_restores_state_when_enabled() -> None:

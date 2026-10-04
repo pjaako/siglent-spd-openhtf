@@ -1,6 +1,6 @@
 # AGENTS.md
 
-OpenHTF plug for Siglent SPD4000X power supplies (tested on SPD4323X). Read `SPEC.md`; it is the contract.
+OpenHTF plug for Siglent SPD4000X power supplies (target: SPD4323X, hardware acceptance pending). Read `SPEC.md`; it is the contract.
 
 - The only source of truth for SCPI commands is `docs/scpi_reference.md`, transcribed from `docs/SPD4000X_UserManual_E01C.pdf`. Never use a command, parameter or response format from another Siglent model or from another project. If a command you need is not in that file, stop and say so.
 - Everything the manual leaves open is listed in `docs/scpi_reference.md` section 8. Where this project depends on an answer, the assumption is marked `# ASSUMPTION(hw): ...` in the source and implemented the same way in the fake. Hardware acceptance resolves them one by one; each answer goes into README "Things the manual does not tell you", and the fake is corrected to match.
@@ -16,3 +16,4 @@ OpenHTF plug for Siglent SPD4000X power supplies (tested on SPD4323X). Read `SPE
 - Git: develop on the branch the session was given, commit with a descriptive message, and end every commit message with the co-author trailer `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>` and the session link, when the harness provides them. Do not put model identifiers anywhere else in the repository.
 - Roles: the project-owner agent writes specs, delegates coding to cheaper agents (Sonnet class), has the result reviewed by a stronger agent (Opus class) where it matters, and keeps `SPEC.md`, `AGENTS.md`, `README.md` and `docs/` current enough that a cold agent can take over at any commit. `docs/research.md` records why this project exists and what it borrows from.
 - Status for a cold agent is in `HANDOFF.md` (committed in this repo, unlike the sibling project): what is done, what is in flight, what is blocked on hardware.
+- Hardware acceptance protocol: `docs/acceptance.md`. Run `tools/bare_socket_check.py` first (read-only), then `tools/hw_acceptance.py`; both take `PSU_HOST`, refuse destructive commands in code, and write reports as `*.local.*` files that git ignores.

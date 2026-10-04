@@ -186,6 +186,153 @@ def _parse_sense(text: str) -> SenseMode:
     raise RuntimeError(f'MODE?: unrecognised answer {text!r}')
 
 
+def _boolean(name: str, value: object) -> bool:
+    """Accept only a real bool or the ints 0 and 1; anything else is a caller mistake.
+
+    ``bool(on)`` would turn the string ``'off'`` into True and switch an output ON.
+    """
+    if isinstance(value, bool):
+        return value
+    if type(value) is int and value in (0, 1):
+        return bool(value)
+    raise ValueError(f'{name} must be a bool or the int 0 or 1, got {value!r}')
+
+
+# ASSUMPTION(hw): channel addressing / optional nodes. Every command is sent in the exact form
+# the manual prints in its example (leading colon, SOURce prefix and :SET node included),
+# because a command without [:SET] "will operate on the current channel" (manual 10.2) and the
+# manual does not say whether the channel argument is honoured then. Queries are derived from
+# the printed example of the paired set command. This class is the only place that builds
+# command strings.
+class _Scpi:
+    IDN = '*IDN?'
+    OPC = '*OPC?'
+    TRACK_QUERY = 'OUTPut:TRACK?'
+    LOCK_QUERY = ':SOURce:LOCK:STATe?'
+
+    @staticmethod
+    def voltage(n: int, value: str) -> str:
+        return f':SOURce:VOLTage:SET CH{n},{value}'
+
+    @staticmethod
+    def voltage_query(n: int) -> str:
+        return f':SOURce:VOLTage:SET? CH{n}'
+
+    @staticmethod
+    def current(n: int, value: str) -> str:
+        return f':SOURce:CURRent:SET CH{n},{value}'
+
+    @staticmethod
+    def current_query(n: int) -> str:
+        return f':SOURce:CURRent:SET? CH{n}'
+
+    @staticmethod
+    def ovp(n: int, value: str) -> str:
+        return f':SOURce:OVP CH{n},{value}'
+
+    @staticmethod
+    def ovp_query(n: int) -> str:
+        return f':SOURce:OVP? CH{n}'
+
+    @staticmethod
+    def ocp(n: int, value: str) -> str:
+        return f':SOURce:OCP CH{n},{value}'
+
+    @staticmethod
+    def ocp_query(n: int) -> str:
+        return f':SOURce:OCP? CH{n}'
+
+    @staticmethod
+    def ocp_state(n: int, on: bool) -> str:
+        # ASSUMPTION(hw): no space. The manual example is ':SOURce:OCP:STATe CH1, 1' (a space
+        # after the comma); every other example has none, so none is sent.
+        return f':SOURce:OCP:STATe CH{n},{int(on)}'
+
+    @staticmethod
+    def ocp_state_query(n: int) -> str:
+        return f':SOURce:OCP:STATe? CH{n}'
+
+    @staticmethod
+    def ocp_delay(n: int, value: str) -> str:
+        return f'OCP:DELay CH{n},{value}'
+
+    @staticmethod
+    def ocp_delay_query(n: int) -> str:
+        return f'OCP:DELay? CH{n}'
+
+    @staticmethod
+    def ovp_tripped_query(n: int) -> str:
+        return f':SOURce:OVP:PROTect:STATe? CH{n}'
+
+    @staticmethod
+    def ocp_tripped_query(n: int) -> str:
+        return f':SOURce:OCP:PROTect:STATe? CH{n}'
+
+    @staticmethod
+    def reset_protection(n: int) -> str:
+        return f':SOURce:RESET:PROTect CH{n}'
+
+    @staticmethod
+    def lock(on: bool) -> str:
+        return f':SOURce:LOCK:STATe {"ON" if on else "OFF"}'
+
+    @staticmethod
+    def output(n: int, on: bool) -> str:
+        return f'OUTPut CH{n},{int(on)}'
+
+    @staticmethod
+    def output_query(n: int) -> str:
+        return f'OUTPut? CH{n}'
+
+    @staticmethod
+    def output_all(on: bool) -> str:
+        return f'OUTPut:ALL {int(on)}'
+
+    @staticmethod
+    def on_delay(n: int, value: str) -> str:
+        return f'OUTPut:ON:DELay CH{n},{value}'
+
+    @staticmethod
+    def on_delay_query(n: int) -> str:
+        return f'OUTPut:ON:DELay? CH{n}'
+
+    @staticmethod
+    def off_delay(n: int, value: str) -> str:
+        return f'OUTPut:OFF:DELay CH{n},{value}'
+
+    @staticmethod
+    def off_delay_query(n: int) -> str:
+        return f'OUTPut:OFF:DELay? CH{n}'
+
+    @staticmethod
+    def track(word: str) -> str:
+        return f'OUTPut:TRACK {word}'
+
+    @staticmethod
+    def sense(n: int, word: str) -> str:
+        return f'MODE CH{n},{word}'
+
+    @staticmethod
+    def sense_query(n: int) -> str:
+        return f'MODE? CH{n}'
+
+    @staticmethod
+    def measure_voltage_query(n: int) -> str:
+        return f'MEASure:VOLTage? CH{n}'
+
+    @staticmethod
+    def measure_current_query(n: int) -> str:
+        return f'MEASure:CURRent? CH{n}'
+
+    @staticmethod
+    def measure_power_query(n: int) -> str:
+        return f'MEASure:POWER? CH{n}'
+
+    @staticmethod
+    def run_mode_query(n: int) -> str:
+        return f'MEASure:RUN:MODE? CH{n}'
+
+
 class SiglentSpdPlug(BasePlug):  # type: ignore[misc]
     """Control a Siglent SPD4000X power supply over PyVISA."""
 
@@ -208,6 +355,7 @@ class SiglentSpdPlug(BasePlug):  # type: ignore[misc]
         )
         self._rm: Any = None
         self._closed = False
+        self._transport_error: Exception | None = None  # last exception raised by the resource
         self._track: TrackMode | None = None
         self._snapshot: dict[str, Any] | None = None
         self.model: Model | None = None
@@ -289,11 +437,19 @@ class SiglentSpdPlug(BasePlug):  # type: ignore[misc]
 
     def write(self, cmd: str) -> None:
         self.logger.debug('SCPI write: %s', cmd)
-        self.resource.write(cmd)
+        try:
+            self.resource.write(cmd)
+        except Exception as exc:
+            self._transport_error = exc
+            raise
 
     def query(self, cmd: str) -> str:
         self.logger.debug('SCPI query: %s', cmd)
-        answer = self.resource.query(cmd).strip()
+        try:
+            answer = self.resource.query(cmd).strip()
+        except Exception as exc:
+            self._transport_error = exc
+            raise
         self.logger.debug('SCPI answer: %s', answer)
         return answer
 
@@ -353,17 +509,17 @@ class SiglentSpdPlug(BasePlug):  # type: ignore[misc]
     # ---- identity and state -------------------------------------------------------------
 
     def idn(self) -> Identity:
-        answer = self.query('*IDN?')
+        answer = self.query(_Scpi.IDN)
         fields = [f.strip() for f in answer.split(',', 3)]
         if len(fields) < 4:
             raise RuntimeError(f'*IDN? answered {answer!r}, expected 4 comma-separated fields')
         return Identity(*fields)
 
     def opc(self) -> str:
-        return self.query('*OPC?')
+        return self.query(_Scpi.OPC)
 
     def snapshot(self) -> dict[str, Any]:
-        """Read setpoints, protection values and output states of every channel."""
+        """Read setpoints, protection values, delays and output states of every channel."""
         channels: dict[int, dict[str, Any]] = {}
         for n in _ALL_CHANNELS:
             channels[n] = {
@@ -373,42 +529,75 @@ class SiglentSpdPlug(BasePlug):  # type: ignore[misc]
                 'ocp': self.ocp(n),
                 'ocp_enabled': self.ocp_enabled(n),
                 'ocp_delay': self.ocp_delay(n),
+                'on_delay': self._on_delay(n),
+                'off_delay': self._off_delay(n),
                 'output': self.output(n),
             }
         return {'channels': channels, 'track': self.track()}
 
     def restore(self, snapshot: dict[str, Any]) -> None:
-        """Write a snapshot back. Never turns an output on; raises one error for all failures."""
-        failures: list[str] = []
+        """Write a snapshot back. Never turns an output on; raises one error for all problems.
 
-        def attempt(label: str, action: Callable[[], Any]) -> None:
+        The track mode is written first and only if it differs. A channel whose output is on
+        is skipped (changing setpoints under a running DUT is not a restore), and so are CH2
+        and CH3 if the track restore failed. Every skipped channel is named in the error.
+        """
+        failures: list[str] = []
+        skipped: list[str] = []
+
+        def attempt(label: str, action: Callable[[], Any]) -> bool:
             try:
                 action()
             except Exception as exc:
                 failures.append(f'{label}: {exc}')
+                return False
+            return True
 
         wanted: TrackMode = snapshot['track']
+        track_ok = True
         try:
             current = self.track()
         except Exception as exc:
             failures.append(f'track: {exc}')
+            track_ok = False
         else:
             if current != wanted:
-                attempt('track', lambda: self.set_track(wanted))
+                track_ok = attempt('track', lambda: self.set_track(wanted))
         for n, values in snapshot['channels'].items():
             # The 'output' entry is deliberately ignored: restore never enables an output.
+            if n in (2, 3) and not track_ok:
+                skipped.append(f'CH{n} (track mode not restored)')
+                continue
+            try:
+                is_on = self.output(n)
+            except Exception as exc:
+                failures.append(f'CH{n} output state: {exc}')
+                skipped.append(f'CH{n} (output state unknown)')
+                continue
+            if is_on:
+                skipped.append(f'CH{n} (output is on)')
+                continue
             setters: list[tuple[str, Callable[[int, Any], None], Any]] = [
                 ('OVP', self.set_ovp, values['ovp']),
                 ('OCP', self.set_ocp, values['ocp']),
                 ('OCP delay', self.set_ocp_delay, values['ocp_delay']),
                 ('OCP state', self.set_ocp_enabled, values['ocp_enabled']),
+                ('ON delay', lambda ch, v: self.set_output_delay(ch, on_s=v), values['on_delay']),
+                (
+                    'OFF delay',
+                    lambda ch, v: self.set_output_delay(ch, off_s=v),
+                    values['off_delay'],
+                ),
                 ('voltage', self.set_voltage, values['voltage']),
                 ('current', self.set_current, values['current']),
             ]
             for label, setter, value in setters:
                 attempt(f'CH{n} {label}', partial(setter, n, value))
-        if failures:
-            raise RuntimeError('restore failed: ' + '; '.join(failures))
+        if failures or skipped:
+            parts = list(failures)
+            if skipped:
+                parts.append('skipped channels: ' + ', '.join(skipped))
+            raise RuntimeError('restore failed: ' + '; '.join(parts))
 
     # ---- limits -------------------------------------------------------------------------
 
@@ -419,6 +608,9 @@ class SiglentSpdPlug(BasePlug):  # type: ignore[misc]
         if ch in (1, 4):
             return self.model.channels[ch - 1]
         mode = self._track if self._track is not None else self.track()
+        # ASSUMPTION(hw): series/parallel setpoint is the combined value on CH2. In SERIES
+        # mode CH2 is assumed to accept up to the series voltage and in PARALLEL mode up to
+        # the parallel current (docs/scpi_reference.md section 8, question 21).
         if mode is TrackMode.SERIES:
             return self.model.series
         if mode is TrackMode.PARALLEL:
@@ -441,34 +633,34 @@ class SiglentSpdPlug(BasePlug):  # type: ignore[misc]
         n = _channel(ch)
         value = _nonnegative('volts', volts)
         self._guard_voltage(n, value)
-        self.write_verified(f'VOLTage CH{n},{self._fmt(value)}', f'VOLTage? CH{n}', value)
+        self.write_verified(_Scpi.voltage(n, self._fmt(value)), _Scpi.voltage_query(n), value)
 
     def voltage_setpoint(self, ch: int | Channel) -> float:
         n = _channel(ch)
-        return _to_float(self.query(f'VOLTage? CH{n}'), f'VOLTage? CH{n}')
+        return _to_float(self.query(_Scpi.voltage_query(n)), _Scpi.voltage_query(n))
 
     def set_current(self, ch: int | Channel, amps: float) -> None:
         n = _channel(ch)
         value = _nonnegative('amps', amps)
         self._guard_current(n, value)
-        self.write_verified(f'CURRent CH{n},{self._fmt(value)}', f'CURRent? CH{n}', value)
+        self.write_verified(_Scpi.current(n, self._fmt(value)), _Scpi.current_query(n), value)
 
     def current_setpoint(self, ch: int | Channel) -> float:
         n = _channel(ch)
-        return _to_float(self.query(f'CURRent? CH{n}'), f'CURRent? CH{n}')
+        return _to_float(self.query(_Scpi.current_query(n)), _Scpi.current_query(n))
 
     def set_output(self, ch: int | Channel, on: bool) -> None:
         n = _channel(ch)
-        state = bool(on)
-        self.write_verified(f'OUTPut CH{n},{int(state)}', f'OUTPut? CH{n}', state)
+        state = _boolean('on', on)
+        self.write_verified(_Scpi.output(n, state), _Scpi.output_query(n), state)
 
     def output(self, ch: int | Channel) -> bool:
         n = _channel(ch)
-        return _to_bool(self.query(f'OUTPut? CH{n}'), f'OUTPut? CH{n}')
+        return _to_bool(self.query(_Scpi.output_query(n)), _Scpi.output_query(n))
 
     def set_all_outputs(self, on: bool) -> None:
-        state = bool(on)
-        self.write(f'OUTPut:ALL {int(state)}')
+        state = _boolean('on', on)
+        self.write(_Scpi.output_all(state))
         # The all-channel query format is undocumented, so verify each channel.
         failures: list[str] = []
         for n in _ALL_CHANNELS:
@@ -480,10 +672,16 @@ class SiglentSpdPlug(BasePlug):  # type: ignore[misc]
             if actual != state:
                 failures.append(f'CH{n}: expected output {int(state)}, read {int(actual)}')
         if failures:
-            raise RuntimeError(f'OUTPut:ALL {int(state)} not confirmed: ' + '; '.join(failures))
+            raise RuntimeError(f'{_Scpi.output_all(state)} not confirmed: ' + '; '.join(failures))
 
     def all_outputs_off(self) -> None:
         self.set_all_outputs(False)
+
+    def _on_delay(self, n: int) -> float:
+        return _to_float(self.query(_Scpi.on_delay_query(n)), _Scpi.on_delay_query(n))
+
+    def _off_delay(self, n: int) -> float:
+        return _to_float(self.query(_Scpi.off_delay_query(n)), _Scpi.off_delay_query(n))
 
     def set_output_delay(
         self, ch: int | Channel, on_s: float | None = None, off_s: float | None = None
@@ -497,13 +695,11 @@ class SiglentSpdPlug(BasePlug):  # type: ignore[misc]
         off_value = None if off_s is None else _delay('off_s', off_s)
         if on_value is not None:
             self.write_verified(
-                f'OUTPut:ON:DELay CH{n},{self._fmt(on_value)}', f'OUTPut:ON:DELay? CH{n}', on_value
+                _Scpi.on_delay(n, self._fmt(on_value)), _Scpi.on_delay_query(n), on_value
             )
         if off_value is not None:
             self.write_verified(
-                f'OUTPut:OFF:DELay CH{n},{self._fmt(off_value)}',
-                f'OUTPut:OFF:DELay? CH{n}',
-                off_value,
+                _Scpi.off_delay(n, self._fmt(off_value)), _Scpi.off_delay_query(n), off_value
             )
 
     def configure_channel(
@@ -519,14 +715,16 @@ class SiglentSpdPlug(BasePlug):  # type: ignore[misc]
     ) -> None:
         """Apply the given items in the order ovp, ocp, ocp_delay, ocp_enabled, voltage, current.
 
-        Every item is attempted; one RuntimeError lists all failures.
+        Every item is attempted; one RuntimeError lists all failures. A non-boolean
+        ``ocp_enabled`` raises ValueError before anything is sent.
         """
         n = _channel(ch)
+        enabled = None if ocp_enabled is None else _boolean('ocp_enabled', ocp_enabled)
         steps: list[tuple[str, Any, Callable[[Any], None]]] = [
             ('ovp', ovp, lambda x: self.set_ovp(n, x)),
             ('ocp', ocp, lambda x: self.set_ocp(n, x)),
             ('ocp_delay', ocp_delay, lambda x: self.set_ocp_delay(n, x)),
-            ('ocp_enabled', ocp_enabled, lambda x: self.set_ocp_enabled(n, x)),
+            ('ocp_enabled', enabled, lambda x: self.set_ocp_enabled(n, x)),
             ('voltage', voltage, lambda x: self.set_voltage(n, x)),
             ('current', current, lambda x: self.set_current(n, x)),
         ]
@@ -546,71 +744,73 @@ class SiglentSpdPlug(BasePlug):  # type: ignore[misc]
     def set_ovp(self, ch: int | Channel, volts: float) -> None:
         n = _channel(ch)
         value = _nonnegative('volts', volts)
-        self.write_verified(f'OVP CH{n},{self._fmt(value)}', f'OVP? CH{n}', value)
+        self.write_verified(_Scpi.ovp(n, self._fmt(value)), _Scpi.ovp_query(n), value)
 
     def ovp(self, ch: int | Channel) -> float:
         n = _channel(ch)
-        return _to_float(self.query(f'OVP? CH{n}'), f'OVP? CH{n}')
+        return _to_float(self.query(_Scpi.ovp_query(n)), _Scpi.ovp_query(n))
 
     def set_ocp(self, ch: int | Channel, amps: float) -> None:
         n = _channel(ch)
         value = _nonnegative('amps', amps)
-        self.write_verified(f'OCP CH{n},{self._fmt(value)}', f'OCP? CH{n}', value)
+        self.write_verified(_Scpi.ocp(n, self._fmt(value)), _Scpi.ocp_query(n), value)
 
     def ocp(self, ch: int | Channel) -> float:
         n = _channel(ch)
         # ASSUMPTION(hw): OCP? answers a plain number like OVP?; the manual prints no response.
-        return _to_float(self.query(f'OCP? CH{n}'), f'OCP? CH{n}')
+        return _to_float(self.query(_Scpi.ocp_query(n)), _Scpi.ocp_query(n))
 
     def set_ocp_enabled(self, ch: int | Channel, on: bool) -> None:
         n = _channel(ch)
-        state = bool(on)
-        self.write_verified(f'OCP:STATe CH{n},{int(state)}', f'OCP:STATe? CH{n}', state)
+        state = _boolean('on', on)
+        self.write_verified(_Scpi.ocp_state(n, state), _Scpi.ocp_state_query(n), state)
 
     def ocp_enabled(self, ch: int | Channel) -> bool:
         n = _channel(ch)
-        return _to_bool(self.query(f'OCP:STATe? CH{n}'), f'OCP:STATe? CH{n}')
+        return _to_bool(self.query(_Scpi.ocp_state_query(n)), _Scpi.ocp_state_query(n))
 
     def set_ocp_delay(self, ch: int | Channel, seconds: float) -> None:
         n = _channel(ch)
         value = _delay('seconds', seconds)
-        self.write_verified(f'OCP:DELay CH{n},{self._fmt(value)}', f'OCP:DELay? CH{n}', value)
+        self.write_verified(_Scpi.ocp_delay(n, self._fmt(value)), _Scpi.ocp_delay_query(n), value)
 
     def ocp_delay(self, ch: int | Channel) -> float:
         n = _channel(ch)
-        return _to_float(self.query(f'OCP:DELay? CH{n}'), f'OCP:DELay? CH{n}')
+        return _to_float(self.query(_Scpi.ocp_delay_query(n)), _Scpi.ocp_delay_query(n))
 
     def protection_status(self, ch: int | Channel) -> ProtectionStatus:
         n = _channel(ch)
         # ASSUMPTION(hw): 1 means tripped, 0 means not tripped. The manual only prints 0.
-        ovp = _to_bool(self.query(f'OVP:PROTect:STATe? CH{n}'), f'OVP:PROTect:STATe? CH{n}')
-        ocp = _to_bool(self.query(f'OCP:PROTect:STATe? CH{n}'), f'OCP:PROTect:STATe? CH{n}')
+        ovp = _to_bool(self.query(_Scpi.ovp_tripped_query(n)), _Scpi.ovp_tripped_query(n))
+        ocp = _to_bool(self.query(_Scpi.ocp_tripped_query(n)), _Scpi.ocp_tripped_query(n))
         return ProtectionStatus(ovp_tripped=ovp, ocp_tripped=ocp)
 
     def clear_protection(self, ch: int | Channel) -> None:
         n = _channel(ch)
-        self.write(f'RESET:PROTect CH{n}')
+        self.write(_Scpi.reset_protection(n))
         status = self.protection_status(n)
         if status.ovp_tripped or status.ocp_tripped:
-            raise RuntimeError(f'CH{n} is still in protection after RESET:PROTect: {status}')
+            raise RuntimeError(
+                f'CH{n} is still in protection after {_Scpi.reset_protection(n)}: {status}'
+            )
 
     # ---- measurement --------------------------------------------------------------------
 
     def measure_voltage(self, ch: int | Channel) -> float:
         n = _channel(ch)
-        return _to_float(self.query(f'MEASure:VOLTage? CH{n}'), f'MEASure:VOLTage? CH{n}')
+        return _to_float(self.query(_Scpi.measure_voltage_query(n)), _Scpi.measure_voltage_query(n))
 
     def measure_current(self, ch: int | Channel) -> float:
         n = _channel(ch)
-        return _to_float(self.query(f'MEASure:CURRent? CH{n}'), f'MEASure:CURRent? CH{n}')
+        return _to_float(self.query(_Scpi.measure_current_query(n)), _Scpi.measure_current_query(n))
 
     def measure_power(self, ch: int | Channel) -> float:
         n = _channel(ch)
-        return _to_float(self.query(f'MEASure:POWER? CH{n}'), f'MEASure:POWER? CH{n}')
+        return _to_float(self.query(_Scpi.measure_power_query(n)), _Scpi.measure_power_query(n))
 
     def run_mode(self, ch: int | Channel) -> str:
         n = _channel(ch)
-        return self.query(f'MEASure:RUN:MODE? CH{n}')
+        return self.query(_Scpi.run_mode_query(n))
 
     def measure(self, ch: int | Channel) -> Reading:
         n = _channel(ch)
@@ -653,12 +853,12 @@ class SiglentSpdPlug(BasePlug):  # type: ignore[misc]
                 raise RuntimeError(f'refusing to change the track mode while CH{n} output is on')
         self._track = None  # the cached value is untrusted until the read-back succeeds
         self.write_verified(
-            f'OUTPut:TRACK {wanted.value}', 'OUTPut:TRACK?', wanted, parse=_parse_track
+            _Scpi.track(wanted.value), _Scpi.TRACK_QUERY, wanted, parse=_parse_track
         )
         self._track = wanted
 
     def track(self) -> TrackMode:
-        mode = _parse_track(self.query('OUTPut:TRACK?'))
+        mode = _parse_track(self.query(_Scpi.TRACK_QUERY))
         self._track = mode
         return mode
 
@@ -668,25 +868,48 @@ class SiglentSpdPlug(BasePlug):  # type: ignore[misc]
             raise ValueError(f'remote sense exists only on CH2 and CH3, not CH{n}')
         wanted = SenseMode(mode)
         self.write_verified(
-            f'MODE CH{n},{wanted.value}', f'MODE? CH{n}', wanted, parse=_parse_sense
+            _Scpi.sense(n, wanted.value), _Scpi.sense_query(n), wanted, parse=_parse_sense
         )
 
     def sense(self, ch: int | Channel) -> SenseMode:
         n = _channel(ch)
         if n not in (2, 3):
             raise ValueError(f'remote sense exists only on CH2 and CH3, not CH{n}')
-        return _parse_sense(self.query(f'MODE? CH{n}'))
+        return _parse_sense(self.query(_Scpi.sense_query(n)))
 
     # ---- lock and teardown --------------------------------------------------------------
 
     def set_lock(self, on: bool) -> None:
-        state = bool(on)
-        self.write_verified(f'LOCK {int(state)}', 'LOCK?', state)
+        state = _boolean('on', on)
+        self.write_verified(_Scpi.lock(state), _Scpi.LOCK_QUERY, state)
 
     def locked(self) -> bool:
-        return _to_bool(self.query('LOCK?'), 'LOCK?')
+        return _to_bool(self.query(_Scpi.LOCK_QUERY), _Scpi.LOCK_QUERY)
+
+    def _zero_pending_off_delays(self) -> None:
+        """Set a non-zero OFF delay of every channel that is on to 0 (a delayed switch-off
+        would leave the DUT powered after the test ended)."""
+        for n in _ALL_CHANNELS:
+            try:
+                if not self.output(n):
+                    continue
+                delay = self._off_delay(n)
+                if delay == 0:
+                    continue
+                self.logger.warning(
+                    'teardown: CH%d has an OFF delay of %g s; setting it to 0 so that the '
+                    'output switches off at once',
+                    n,
+                    delay,
+                )
+                self.set_output_delay(n, off_s=0)
+            except Exception as exc:
+                self.logger.warning('teardown: CH%d OFF delay check failed: %s', n, exc)
+                if self._transport_error is not None:
+                    return  # the link is down; do not wait for a timeout per channel
 
     def _outputs_off_safely(self) -> None:
+        self._zero_pending_off_delays()
         try:
             self.all_outputs_off()
         except Exception as exc:
@@ -701,18 +924,28 @@ class SiglentSpdPlug(BasePlug):  # type: ignore[misc]
 
     def tearDown(self) -> None:
         """Outputs off, optional restore, unlock, close. A failing step never stops the next."""
-        steps: list[tuple[str, Callable[[], None]]] = []
+        skip_restore: str | None = None
         if self._outputs_off_on_teardown:
-            steps.append(('outputs off', self._outputs_off_safely))
+            self._transport_error = None
+            self._teardown_step('outputs off', self._outputs_off_safely)
+            if self._transport_error is not None:
+                skip_restore = (
+                    'a transport error occurred while turning the outputs off '
+                    f'({type(self._transport_error).__name__}: {self._transport_error})'
+                )
         snapshot = self._snapshot
         if self._restore_state and snapshot is not None:
-            steps.append(('restore state', lambda: self.restore(snapshot)))
+            if skip_restore is not None:
+                self.logger.warning('teardown: restore state skipped because %s', skip_restore)
+            else:
+                self._teardown_step('restore state', lambda: self.restore(snapshot))
         # ASSUMPTION(hw): needed. The panel locks itself under remote control (manual,
         # chapter 5); unlocking at the end is assumed to be required to hand it back.
-        steps.append(('unlock front panel', lambda: self.set_lock(False)))
-        for label, step in steps:
-            try:
-                step()
-            except Exception as exc:
-                self.logger.warning('teardown step %r failed: %s', label, exc)
+        self._teardown_step('unlock front panel', lambda: self.set_lock(False))
         self._close()
+
+    def _teardown_step(self, label: str, step: Callable[[], None]) -> None:
+        try:
+            step()
+        except Exception as exc:
+            self.logger.warning('teardown step %r failed: %s', label, exc)

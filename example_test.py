@@ -24,13 +24,13 @@ LOAD_OHMS = 10.0  # only used by the fake supply
 
 
 class FakeSiglentSpdPlug(SiglentSpdPlug):
-    """The plug wired to a simulated supply with a 10 ohm load on CH1."""
+    """The plug wired to a simulated supply with a 10 ohm load on CH1.
+
+    It keeps the default teardown policy (all outputs off), like the real plug.
+    """
 
     def __init__(self) -> None:
-        super().__init__(
-            resource=FakeSpdResource(loads={CH: LOAD_OHMS}),
-            outputs_off_on_teardown=False,
-        )
+        super().__init__(resource=FakeSpdResource(loads={CH: LOAD_OHMS}))
 
 
 @htf.plug(psu=SiglentSpdPlug)
