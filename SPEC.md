@@ -166,17 +166,28 @@ Guard rule: when `self.model` is known, `set_voltage`/`set_current` reject
 values above the channel's **rated** value with `ValueError` before anything is
 sent. The instrument itself accepts up to 1.01 x rating (`VOLTage? CHn,MAX`)
 and clamps silently beyond; that 1 % is headroom, not a specification, so the
-guard stays at the rating. The plug caches the track mode from
+guard stays at the rating. The one exception is the combined CH2 write of
+the coupled modes (see below), whose guard is the model's series/parallel rating.
+The plug caches the track mode from
 `track()`/`set_track()` and reads it once lazily when needed.
 
-Coupled modes (open question 21, write side untested): while the cached track
-mode is SERIES or PARALLEL, `set_voltage`/`set_current`/`configure_channel`
-on CH2 or CH3 raise `RuntimeError` naming question 21 before anything is
-sent, and `restore()` skips CH2/CH3 setpoints (reporting them). Reason: the
-read side is the combined value (`VOLTage? CH2` = 28 with 14 V per half), the
-write side is unknown, and a per-half write would double the terminal voltage
-before the read-back could object. `# ASSUMPTION(hw): write side of question 21`
-stays in plug and fake until the extended experiment 15 has run.
+Coupled modes (open question 21, verified on SPD4323X, firmware 4.1.2.9R1,
+2026-10-04, `docs/hardware_findings.md` run 2): a setpoint written to CH2 is the
+**combined** value (SERIES: `VOLTage CH2,20` reads back 20 on CH2 and 10 on
+CH3; PARALLEL: `CURRent CH2,5` reads back 5 on CH2 and 2.5 on CH3). While the
+cached track mode is SERIES or PARALLEL the plug therefore allows exactly two
+setpoint writes on CH2/CH3, with the usual read-back: the **voltage of CH2 in
+SERIES** and the **current of CH2 in PARALLEL**; their guard is the model's
+`series.voltage` (SERIES) or `parallel.current` (PARALLEL) rating. Every other
+voltage or current write on CH2 or CH3 in a coupled mode (CH3, the current of
+CH2 in SERIES, the voltage of CH2 in PARALLEL), whether through `set_voltage`,
+`set_current` or `configure_channel`, raises `RuntimeError` naming question 21
+before anything is sent: nobody has tried them on hardware. `configure_channel`
+checks its `voltage`/`current` items up front; OVP/OCP items are not affected.
+`restore()` restores the allowed quantity and skips the rest (reporting it).
+Not yet tried (open): the upper limit of a numeric combined write (5 A was
+accepted in PARALLEL although `MAX` is 3.232 A; the `MAXimum` keyword stays
+per channel) and everything listed above as refused.
 
 `max_voltage(ch)` / `max_current(ch)` query `:SOURce:VOLTage:SET? CHn,MAXimum` /
 `:SOURce:CURRent:SET? CHn,MAXimum` (verified) and return the float.
@@ -228,6 +239,9 @@ There is no OVP enable command in the manual; do not invent one.
    test ends). Then `all_outputs_off()`; if `OUTPut:ALL 0` fails, fall back to
    `OUTPut CHn,0` per channel. If this step failed with a transport error, skip
    step 2 (each restore write would wait for its own timeout).
+   (Verified, run 2: `OUTPut:ALL 0` honours a pending OFF delay, so zeroing it
+   first is necessary, and writing the delay 0 switches a pending output off at
+   once.)
 2. If `restore_state` and a snapshot exists: `restore(snapshot)`.
 3. `set_lock(False)`: any remote write sets `LOCK` to 1 (verified), so this must
    stay the **last** write of the session; nothing may be written after it.
@@ -270,7 +284,8 @@ No `pyvisa` import. Constructor:
 - Clamping as observed: voltage/current clamp to **1.01 x rating** (`MAX`,
   e.g. 6.060000 / 32.320000 / 3.232000 on the SPD4323X) and to 0 below; OVP/OCP
   clamp to 0.1 x .. 1.1 x rating; OCP delay clamps to 0..3600 s; ON/OFF delays
-  the same (`# ASSUMPTION(hw): same as OCP:DELay`). Nothing is ever reported, so
+  the same (`# ASSUMPTION(hw): same as OCP:DELay`; writes of 0, 0.5 and 2 s were
+  accepted on hardware, the clamps were not tried). Nothing is ever reported, so
   a plug without read-back verification would silently pass. `MINimum`/`MAXimum`/
   `DEFault` (and `MIN`/`MAX`/`DEF`) work in set commands for V, I, OVP, OCP and
   delays (DEFault = 0 for V/I/delays, 1.1 x rating for OVP/OCP) and as query
@@ -289,8 +304,18 @@ No `pyvisa` import. Constructor:
 - Track change: entering SERIES/PARALLEL copies CH2's voltage and current
   setpoints to CH3 (kept after INDEPENDENT); store per-half values; in SERIES
   `VOLT? CH2` answers 2 x, in PARALLEL `CURR? CH2` answers 2 x; CH3 answers its
-  own stored value; OVP/OCP are not changed by a track change. Writes to CH2 in
-  coupled modes store value/2 (`# ASSUMPTION(hw): write side of question 21`).
+  own stored value; OVP/OCP are not changed by a track change. A write to CH2's
+  combined quantity (voltage in SERIES, current in PARALLEL) is the combined
+  value (verified): each half stores half of it and **CH3 follows CH2**; the
+  `MAXimum`/`MINimum`/`DEFault` keywords are per channel and used as the combined
+  value (32.32 V resp. 3.232 A for MAXimum, verified); a numeric value is
+  clamped to 0..2 x MAX (`# ASSUMPTION(hw)`: the upper limit was not tried, 5 A
+  above the 3.232 A MAX was accepted). Other writes in a coupled mode (CH3, the
+  other quantity of CH2) are stored per channel (not tried).
+- OFF delay (verified, run 2, Q22): switching an output off with a non-zero OFF
+  delay, by `OUTPut CHn,0` or `OUTPut:ALL 0`, keeps it on (`OUTPut?` answers 1,
+  measurements unchanged) until the delay has elapsed (`advance()`); writing the
+  OFF delay 0 while the switch-off is pending switches the output off at once.
 - `loads`: `dict[int, float | None]` ohms per channel, default `None` = open
   circuit. Measurement model when output is on: open circuit -> V = setpoint,
   I = 0, mode CV; with load R: I = V/R; if I > current setpoint then CC with
@@ -335,13 +360,15 @@ PASS, 1 otherwise.
 ## 7. README.md
 
 Usage snippet first (10 lines), then: supported models table stating that the
-SPD4323X is the target and that hardware acceptance is pending (change to
-"tested" only after `docs/acceptance.md` has been run), never stating an
-unverified transport or behaviour as fact (USBTMC, VXI-11 and the unlock step
-are unverified; only socket port 5025 is documented), install (`uv venv` + `uv pip install -e .[dev]`),
+SPD4323X is the target and the only tested model ("tested over LAN (raw
+socket), firmware 4.1.2.9R1" since `docs/acceptance.md` has been run; the other
+two models "not started"), never stating an unverified transport or behaviour
+as fact (USBTMC and VXI-11 are unverified; the raw socket on port 5025 and the
+unlock step are verified), install (`uv venv` + `uv pip install -e .[dev]`),
 transport/resource-name examples with RFC 5737 addresses (`192.0.2.10`),
 teardown policy and CONF keys, running tests and `--fake`, a "Things the manual
-does not tell you" section that is empty until hardware acceptance fills it,
+does not tell you" section filled from the acceptance findings (dated, with
+the raw reply),
 links to `docs/scpi_reference.md`, `SPEC.md`, `AGENTS.md`, licence.
 
 ## Done means
@@ -356,8 +383,9 @@ links to `docs/scpi_reference.md`, `SPEC.md`, `AGENTS.md`, licence.
 - `HANDOFF.md` updated.
 - The fake reproduces every reply quoted in `docs/hardware_findings.md` for the
   commands the plug uses.
-- `models.tested` stays `False` for the SPD4323X until experiment 30 (output on)
-  and the plug write smoke have run; README then says "tested over LAN (raw
-  socket), firmware 4.1.2.9R1".
+- `models.tested` is `True` for the SPD4323X only (experiments 21, the plug write
+  smoke, and 30, output on, both passed on 2026-10-04); the README model table
+  says "tested over LAN (raw socket), firmware 4.1.2.9R1". It stays `False` for
+  the SPD4121X and SPD4306X.
 - README written as in section 7.
 - No real VISA resource was opened.

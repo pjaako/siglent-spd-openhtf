@@ -231,10 +231,12 @@ question 9 and the unlock of question 12).
 
 `--only 1,2,5` and `--skip 3` select experiments; `--read-only` drops the write tier.
 
-## 7. Next hardware visit (run 2)
+## 7. Hardware visit run 2 (done 2026-10-04)
 
-Run 1 is analysed in `docs/hardware_findings.md`. Run 2 closes what that file lists under
-"Still open". Same prerequisites as section 1, `PSU_HOST` exported, all outputs off, repository
+Run 2 has been done and is analysed in `docs/hardware_findings.md` ("Run 2"); what is still open
+after it is listed there under "Still open after run 2". The plan below is kept as the recipe for
+repeating it (for example on another unit). Run 1 is analysed in the same file; run 2 closed what
+run 1 listed under "Still open". Same prerequisites as section 1, `PSU_HOST` exported, all outputs off, repository
 root as the working directory.
 
 ```bash

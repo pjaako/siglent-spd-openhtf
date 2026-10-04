@@ -24,18 +24,17 @@ outputs off, hands the front panel back and closes the connection. See
 
 ## Supported models
 
-The **SPD4323X is the target** of this plug. A first hardware acceptance run on an
-SPD4323X (firmware 4.1.2.9R1, 2026-10-05, LAN raw socket, all outputs off, nothing
-connected) is analysed in [`docs/hardware_findings.md`](docs/hardware_findings.md). **Output-on
-acceptance is still pending**, so no model is marked "tested" (`models.tested` stays
-`False`; the README will say "tested over LAN (raw socket), firmware 4.1.2.9R1" once
-experiment 30 and the plug write smoke have run). The other two models of the family are
-accepted using the rating table from the manual (`docs/scpi_reference.md` section 6) and
-have not been seen at all.
+The **SPD4323X is the target** of this plug and the only model that has been tested: two
+hardware acceptance runs on one unit (firmware 4.1.2.9R1, LAN raw socket; run 1 with all outputs
+off, run 2 with the plug's write path and `tearDown()`, and one output switched on with nothing
+connected) are analysed in [`docs/hardware_findings.md`](docs/hardware_findings.md), and
+`models.tested` is `True` for it. USB, VXI-11, a real protection trip and a load were not
+tested. The other two models of the family are accepted using the rating table from the
+manual (`docs/scpi_reference.md` section 6) and have not been seen at all.
 
 | Model | CH1 | CH2 / CH3 | CH4 | CH2+CH3 series | CH2+CH3 parallel | Power | Hardware acceptance |
 |---|---|---|---|---|---|---|---|
-| SPD4323X | 6 V / 3.2 A | 32 V / 3.2 A | 6 V / 3.2 A | 60 V / 3.2 A | 32 V / 6.4 A | 240 W | LAN raw socket verified with outputs off (2026-10-05, firmware 4.1.2.9R1); output-on acceptance pending |
+| SPD4323X | 6 V / 3.2 A | 32 V / 3.2 A | 6 V / 3.2 A | 60 V / 3.2 A | 32 V / 6.4 A | 240 W tested over LAN (raw socket), firmware 4.1.2.9R1 |
 | SPD4121X | 15 V / 1.5 A | 12 V / 10 A | 15 V / 1.5 A | 24 V / 10 A | 12 V / 20 A | 285 W | not started |
 | SPD4306X | 15 V / 1.5 A | 30 V / 6 A | 15 V / 1 A (as printed) | 60 V / 6 A | 30 V / 12 A | 400 W | not started |
 
@@ -52,13 +51,14 @@ warning and only the read-back after each setter protects against out-of-range v
   what the supply reports as its own limit (`:SOURce:VOLTage:SET? CHn,MAXimum`, for example
   6.06 V on CH1) for information; the guard does not use them. A `restore()` of a value that
   sat between the rating and that limit fails that item with `ValueError` and is reported.
-- **Series/parallel is write-protected for now.** While the track mode is SERIES or PARALLEL,
-  `set_voltage`, `set_current` and `configure_channel` on CH2 or CH3 raise `RuntimeError`
-  naming open question 21 before anything is sent, and `restore()` skips CH2/CH3 voltage and
-  current and reports them. Reading is fine: in SERIES `VOLTage? CH2` is the combined voltage.
-  What a setpoint *written* in a coupled mode means (combined or per half) has not been
-  tried on hardware, and a per-half write would double the terminal voltage before the
-  read-back could object.
+- **Series/parallel: only the verified writes.** While the track mode is SERIES or PARALLEL,
+  only `set_voltage(2, ...)` in SERIES and `set_current(2, ...)` in PARALLEL are allowed. On the
+  SPD4323X such a write is the *combined* value (read back unchanged from CH2; CH3 follows
+  with half), and its guard is the model's series (60 V) or parallel (6.4 A) rating. Every
+  other voltage/current write on CH2 or CH3 in a coupled mode (CH3, the current of CH2 in
+  SERIES, the voltage of CH2 in PARALLEL), also through `configure_channel`, raises
+  `RuntimeError` naming open question 21 before anything is sent, because it was never tried on
+  hardware; `restore()` skips those items and reports them.
 - **`set_track()` changes CH3.** Entering SERIES or PARALLEL copies CH2's voltage and current
   setpoints into CH3, and CH3 keeps them after going back to INDEPENDENT. `set_track()` reads
   CH3's setpoints before and after and logs a warning naming both values when they changed.
@@ -89,7 +89,7 @@ socket client at a time**: while the plug holds the connection, no other tool ca
 
 | Transport | Resource name | Status |
 |---|---|---|
-| LAN, raw socket | `TCPIP::192.0.2.10::5025::SOCKET` | verified 2026-10-05 (SPD4323X, firmware 4.1.2.9R1, PyVISA `@py`, LF terminators) |
+| LAN, raw socket | `TCPIP::192.0.2.10::5025::SOCKET` | verified 2026-10-04/05 (SPD4323X, firmware 4.1.2.9R1, PyVISA `@py`, LF terminators) |
 | LAN, VXI-11 | `TCPIP::192.0.2.10::INSTR` | unverified: the manual does not mention VXI-11, and it was not tried |
 | USB (USBTMC) | `USB0::...::INSTR`; leave the resource empty to pick the first USB instrument whose `*IDN?` names an SPD4xxx | unverified: the manual does not mention USBTMC or give a vendor id, and USB was not tried |
 
@@ -113,11 +113,11 @@ or `python example_test.py --resource TCPIP::192.0.2.10::5025::SOCKET`.
 
 `tearDown()` runs these steps in order: all outputs off (if enabled; a non-zero OFF delay
 of a channel that is on is first set to 0 with a warning, so the output really switches
-off), restore the captured state (if enabled; skipped after a transport error while
+off: `OUTPut:ALL 0` honours the delay, see below), restore the captured state (if enabled; skipped after a transport error while
 switching off), unlock the front panel, close the connection. The unlock is needed and must
 stay the last write: any remote write sets `LOCK` to 1 and `LOCK 0` clears it (observed
-through `LOCK?` on 2026-10-05). Whether the panel is then visibly unlocked (lock icon, keys
-usable) has not been checked (`# ASSUMPTION(hw)`). A failing step is logged as a
+through `LOCK?` on 2026-10-05; the front panel was seen unlocked after the plug's
+`tearDown()` on 2026-10-04). A failing step is logged as a
 warning and never stops the next one. The plug never turns an output on in
 `tearDown()` or `restore()`, and it never sends `*RST`, `DEFAult:RESET` or `FACTory:RESET`.
 
@@ -128,10 +128,10 @@ inject the fake.
 
 ## Running without hardware
 
-`FakeSpdResource` models the supply as observed on 2026-10-05 (channel state stored as
+`FakeSpdResource` models the supply as observed on 2026-10-04/05 (channel state stored as
 float32, silent clamping, MIN/MAX/DEF keywords, auto-lock on every write, status registers,
-`;` chaining, the CH2 to CH3 copy of a track change, CV/CC with a resistive load, OVP/OCP
-trips, track mode, sense, lock) and logs every command in `fake.log`. Nothing in the tests
+`;` chaining, the CH2 to CH3 copy of a track change, combined CH2 writes in series/parallel,
+the OFF delay, CV/CC with a resistive load, OVP/OCP trips, track mode, sense, lock) and logs every command in `fake.log`. Nothing in the tests
 opens a real VISA resource.
 
 ```
@@ -147,10 +147,11 @@ the source; answers found on hardware are marked `# verified on SPD4323X ...`.
 
 ## Things the manual does not tell you
 
-Found on 2026-10-05 on an SPD4323X, firmware 4.1.2.9R1 (the manual's example shows 4.1.2.4),
-over the LAN raw socket, all outputs off (details and line references:
-[`docs/hardware_findings.md`](docs/hardware_findings.md)). Other models, USB, VXI-11 and
-everything that needs an output switched on are not covered.
+Found on an SPD4323X, firmware 4.1.2.9R1 (the manual's example shows 4.1.2.4), over the LAN
+raw socket: items 1-15 on 2026-10-05 with all outputs off, items 16-20 on 2026-10-04 (run 2:
+one output switched on with nothing connected). Details and line references:
+[`docs/hardware_findings.md`](docs/hardware_findings.md). Other models, USB, VXI-11, loads and
+protection trips are not covered.
 
 1. Commands end in LF (CRLF is also accepted); every reply ends in a single LF.
 2. `MAX` is 1.01 x the rating for voltage and current (`VOLTage? CH1,MAX` -> `6.060000`);
@@ -172,7 +173,8 @@ everything that needs an output switched on are not covered.
    keeps them (CH3 12 V / 2 A became 14 V / 3 A after a round trip).
 10. In series `VOLTage? CH2` is the combined voltage (`28.000000` with 14 V per half), in
     parallel `CURRent? CH2` the combined current (`6.000000` with 3 A per half); the `MAX`
-    queries ignore the coupling (`32.320000` / `3.232000`). What a *write* means is unknown.
+    queries ignore the coupling (`32.320000` / `3.232000`). A *write* is the combined value
+    too, see item 18.
 11. Any remote write locks the front panel (`LOCK?` -> `1`); `LOCK 0` unlocks and the write
     itself does not re-lock; queries never lock.
 12. One socket client at a time: a second connection is accepted but gets no reply while
@@ -183,9 +185,30 @@ everything that needs an output switched on are not covered.
 15. `;` chains work, but the replies of chained queries are concatenated with no separator
     (`*IDN?;*OPC?` -> `...4.1.2.9R11`).
 
-Still unknown (needs an output on, or another interface): settling time after switching on,
-the state during an OFF delay, protection trips (`1` = tripped is assumed), the meaning of a
-setpoint written in series/parallel, USB and VXI-11. Open questions:
+16. Output on, nothing connected: the first `MEASure:VOLTage? CH1` after `OUTPut CH1,1` (1.0 V)
+    already reads `0.999164` (it is held about 295 ms for the write); no ramp is visible.
+    After `OUTPut CH1,0` the open output decays below 20 mV within about 0.7 s.
+17. OFF delay: with `OUTPut:OFF:DELay CH1,2`, both `OUTPut CH1,0` and `OUTPut:ALL 0` leave
+    `OUTPut? CH1` at `1` and the voltage at 1.0 V for 2.0 s, then it switches off; writing the
+    delay `0` while the switch-off is pending switches the output off at once (`OUTPut?` -> `0`
+    46 ms later). Hence `tearDown()` zeroes a pending OFF delay before `OUTPut:ALL 0`.
+18. A setpoint written to CH2 in a coupled mode is the combined value: in SERIES
+    `VOLTage CH2,20` reads back `20.000000` and CH3 reads `10.000000`; in PARALLEL
+    `CURRent CH2,5` reads back `5.000000` (above the per-channel `MAX` of 3.232 A) and CH3
+    reads `2.500000`. The `MAXimum` keyword still means the per-channel value (`32.320000` V
+    combined in SERIES, `3.232000` A in PARALLEL). Both halves keep their value after going
+    back to INDEPENDENT. OVP and OCP stay per channel. Writes to CH3 in a coupled mode were not
+    tried.
+19. `VOLTage CH5,1` and `VOLTage CH0,1` are ignored: CH1 to CH4 stay as they were (CH4 read back
+    before and after, and `0 V / 0 A` seen on the panel); `*ESR?` stays 0 for them.
+20. The bit-5 behaviour of `*ESR?` is not explained by an "empty error list": after `*CLS`,
+    repeated unknown queries set it every time (`32`, `32`, `32`), while two unknown queries in
+    the read-only phase did not. Read-back stays the only error check.
+
+Still unknown: USB (identity, terminator) and VXI-11, protection trips (`1` = tripped is
+assumed), `OUTPut:TRACK` with an output on, `OUTPut:ALL?` with mixed channel states, writes to
+CH3 in a coupled mode and the upper limit of a numeric combined write, the clamp of the
+ON/OFF delay writes, `MODE` on CH1/CH4, the other two models. Open questions:
 `docs/scpi_reference.md` section 8.
 
 ## More

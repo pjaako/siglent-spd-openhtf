@@ -663,7 +663,7 @@ answers everything that needs an output on.
 |---|---|
 | instrument | Siglent SPD4323X, serial `SPD43XXXXXXXXX` (placeholder) |
 | firmware | `4.1.2.9R1` |
-| date | 2026-10-04 (log times 20:34 to 20:36 for step a, 21:21 for step b; the owner was at the instrument) |
+| date | 2026-10-04 (log times 20:34 to 20:36 for step a, 21:21 for step b; the owner was at the instrument). Run 1 is dated 2026-10-05 in its own section (the clock of the machine that ran it), so run 2 carries the earlier date although it happened later |
 | address | `192.0.2.10` in this document |
 | transport | PyVISA `@py`, `TCPIP::192.0.2.10::5025::SOCKET`, LF terminators, timeout 3000 ms, probe timeout 1500 ms |
 | step (a) | `tools/hw_acceptance.py --report run2.local.md`: experiments 1-6, 8, 10-21 (write tier, outputs off), exit clean, restore `36 items, 0 written back, 36 unchanged, 0 FAILED`, snapshot status `restored`, outputs `{1: 0, 2: 0, 3: 0, 4: 0}` at the end |
@@ -694,9 +694,10 @@ Same picture as run 1; the 5000 ms plug timeout keeps a factor 11 over the slowe
 
 **A setpoint written to CH2 is the combined value, and CH3 follows with half of it.** In SERIES the
 voltage written to CH2 is read back unchanged from CH2 (combined) and CH3 reads half; in PARALLEL the
-same for the current. The combined value is clamped at the per-channel `MAX` (1.01 x rating), **not** at
-the series or parallel rating of the manual (60 V / 6.4 A). OVP and OCP are untouched by every write.
-Both halves keep their value after returning to INDEPENDENT.
+same for the current. A numeric combined value above the per-channel `MAX` is accepted (5 A written to
+CH2 in PARALLEL reads back 5 A although `MAX` is 3.232 A), while the `MAXimum` **keyword** still answers
+the per-channel value (32.32 V resp. 3.232 A, taken as the combined value). OVP and OCP are untouched by
+every write. Both halves keep their value after returning to INDEPENDENT.
 
 ```
 acc 684-685   W 'OUTPut:TRACK SERIES' -> 'OUTPut:TRACK?' -> b'1\n'
@@ -722,11 +723,12 @@ Conclusions:
 - The write side is the **combined value**, so the guess in SPEC.md (and in the fake) was right: the
   read-back of a CH2 write in SERIES equals what was written. A per-half interpretation would have read
   back 40 for `VOLTage CH2,20`.
-- The clamp acts on the **combined** value at the per-channel maximum: `MAXimum` in SERIES gives 32.32 V
-  combined (16.16 V per half), in PARALLEL 3.232 A combined (1.616 A per half). A numeric write above the
-  maximum (for example `VOLTage CH2,40` in SERIES) was **not** tried, so whether the instrument accepts the
-  60 V series rating by number is unknown. The plug's guard stays at the per-channel rating (32 V / 3.2 A),
-  which is also what the instrument's `MAXimum` produces.
+- The `MAXimum` keyword is **not mode-aware**: it writes the per-channel maximum as the combined value,
+  32.32 V in SERIES (16.16 V per half) and 3.232 A in PARALLEL (1.616 A per half), the same finding as for
+  the `MAX` queries (Q14). A **numeric** write is not limited to that: `CURRent CH2,5` in PARALLEL
+  (acc 769-771) read back `5.000000` with CH3 at `2.500000`. The upper limit of a numeric combined write
+  (probably twice `MAX`, i.e. 64.64 V / 6.464 A) and the behaviour of a numeric write above the series
+  rating of the manual (60 V) were **not** tried.
 - **CH3's reading in a coupled mode is the per-half value of CH2's write**; a write to CH3 in SERIES or
   PARALLEL, the voltage of CH2 in PARALLEL and the current of CH2 in SERIES were **not** written. Those stay
   open (the plug keeps refusing them).
@@ -854,7 +856,7 @@ No trip was provoked (nothing connected, no deliberate OVP/OCP fault). `1` = tri
 
 | marker | where | verdict | evidence |
 |---|---|---|---|
-| write side of question 21 | plug `_require_independent`, `restore()`; fake `_do_write` | **answered**: CH2's write is the combined value, CH3 follows half; clamp on the combined value at the per-channel `MAX`. CH3 writes, CH2 current in SERIES and CH2 voltage in PARALLEL **still untested** | acc 742-777 |
+| write side of question 21 | plug `_require_independent`, `restore()`; fake `_do_write` | **answered**: CH2's write is the combined value, CH3 follows half; the `MAXimum` keyword is per channel, a numeric value may exceed it. CH3 writes, CH2 current in SERIES, CH2 voltage in PARALLEL and the upper limit of a numeric combined write **still untested** | acc 742-777 |
 | `OUTPut?` during OFF delay | fake `_set_output` | **confirmed** (also for `OUTPut:ALL 0`); plus: delay 0 while pending switches off at once, which the fake lacked | cases A, B, C |
 | unlock needed / panel visibly unlocked | plug `tearDown()` | **confirmed** (SCPI and panel) | acc 1315-1316, owner |
 | protection state `1` = tripped | plug `protection_status`; fake | **still open** (no trip) | - |
@@ -866,15 +868,17 @@ No trip was provoked (nothing connected, no deliberate OVP/OCP fault). `1` = tri
 
 1. **plug.py**
    1. Replace `_require_independent` by a check that allows, in a coupled mode, exactly the two verified
-      writes: CH2 voltage in SERIES, CH2 current in PARALLEL (combined value, read-back verified, guard at
+      writes: CH2 voltage in SERIES, CH2 current in PARALLEL (combined value, read-back verified; the guard
+      is the series rating 60 V resp. the parallel rating 6.4 A of the model, every other guard stays at
       the per-channel rating). Everything else on CH2/CH3 in a coupled mode keeps raising `RuntimeError`
       (message names question 21 and says which combination is untested). `configure_channel` applies the
       same check per item; `restore()` restores the verified quantity and reports the rest as skipped.
    2. Resolve the unlock marker in `tearDown()`; add the OFF-delay evidence to the `tearDown()` comment.
    3. `models.SPD4323X.tested = True` (experiments 21 and 30 passed).
 2. **fake_resource.py** (each with a test)
-   1. Coupled write of the combined quantity: clamp the combined value to `[0, MAX]`, store half in CH2
-      **and CH3** (CH3 follows), also for `MINimum`/`MAXimum`/`DEFault` (combined, then halved).
+   1. Coupled write of the combined quantity: store half in CH2 **and CH3** (CH3 follows); the keywords
+      `MINimum`/`MAXimum`/`DEFault` give the per-channel value as the combined one (then halved); a numeric
+      value is clamped to `[0, 2 x MAX]` (`# ASSUMPTION(hw)`, upper limit untried).
    2. Setting the OFF delay to 0 while a switch-off is pending switches the output off at once.
    3. Replace the OFF-delay and unlock markers by `verified ...` comments; narrow the delay-clamp marker.
 3. **tests**: coupled writes in SERIES/PARALLEL through plug and fake (combined read-back, CH3 half, clamp,
@@ -892,7 +896,7 @@ No trip was provoked (nothing connected, no deliberate OVP/OCP fault). `1` = tri
 | protection state `1` = tripped, state after a trip and after `RESET:PROTect` (Q10) | a real trip (OCP needs a load; OVP trip without a load is a deliberate fault) |
 | `OUTPut:TRACK` while an output is on (Q13) | owner's decision (live output) |
 | `OUTPut:ALL?` with mixed channel states | two outputs on, nothing connected |
-| CH3 writes in a coupled mode, CH2 current in SERIES, CH2 voltage in PARALLEL, a numeric write above the combined `MAX` | outputs off is enough: a small extension of experiment 15 |
+| CH3 writes in a coupled mode, CH2 current in SERIES, CH2 voltage in PARALLEL, the upper limit of a numeric combined write (`VOLTage CH2,40` in SERIES, `CURRent CH2,7` in PARALLEL) | outputs off is enough: a small extension of experiment 15 |
 | ON/OFF delay clamp at 3600 s | outputs off is enough |
 | `MODE` on CH1/CH4, `VOLTage?` without channel (CH1 vs panel channel) | outputs off, panel state |
 | SPD4121X, SPD4306X (Q14) | other models |

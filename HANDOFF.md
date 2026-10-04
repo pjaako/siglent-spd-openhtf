@@ -20,84 +20,28 @@ Status for a cold agent. Keep this current at every commit.
 - 2026-10-05 Hardware acceptance run 1 on a real SPD4323X (firmware 4.1.2.9R1, LAN raw socket, all outputs off, nothing connected), analysed in `docs/hardware_findings.md`. What ran: read tier (experiments 1-6, 8) and write tier on CH1 with CH2/CH3 touched for track/sense (10-20), `tools/bare_socket_check.py --sweep-terms`. What did not run: experiment 30 (output on; no `OUTPut CHn,<x>` or `OUTPut:ALL <x>` was sent at all), 7 (VXI-11), `*TST?`, USB, web/telnet; the plug's `tearDown()` path has never run on hardware.
 - 2026-10-05 Code brought in line with `SPEC.md` (commit 439ceb8) and the findings: guard at the rated value (not 1.01 x); CH2/CH3 setters, `configure_channel` and `restore()` refuse/skip setpoints while the track mode is SERIES or PARALLEL (open question 21, write side); `set_track()` warns when CH3's setpoints change; `max_voltage()`/`max_current()`; `restore()` reads first and writes only what differs; `tearDown()` documents that the unlock must be the last write. Fake: float32 replies (`35.200001`), 1.1 x OVP/OCP defaults, 1.01 x V/I clamps, delay clamps, MIN/MAX/DEF keywords, auto-lock on writes, status registers, `;` chaining, CH2 to CH3 copy on track change. `models.SETPOINT_MAX_FACTOR` and `PROTECTION_RANGE` added; `models.tested` stays `False`. README "Things the manual does not tell you" filled (15 dated items); `docs/scpi_reference.md` carries `Verified on hardware` lines and a status per open question.
 
-## In flight
-- Tool fixes from the findings (`tools/hw_acceptance.py` `Link.query` one line per command line, extended experiment 15 for the series/parallel write side, experiment 19 reading CH4, the Q6 error-list sequence, an outputs-off plug write smoke, CH4 in the restore/final check) are being made by a parallel agent; this code change does not touch `tools/` or `docs/acceptance.md`.
-- Next: second hardware run (below), then phase 2 candidates.
+### Hardware acceptance run 2 and the code that follows from it
+- 2026-10-04 Hardware acceptance run 2 on the same SPD4323X (firmware 4.1.2.9R1, LAN raw socket), owner at the instrument, analysed in `docs/hardware_findings.md` ("Run 2"). (a) `tools/hw_acceptance.py` with outputs off: experiments 1-6, 8, 10-21, clean restore (0 FAILED, snapshot `restored`). (b) `--only 30,31 --allow-output --confirm-no-load`: CH1 on at 1.0 V / 0.1 A with nothing connected, off confirmed, clean restore. (c) Panel after the run: unlocked, CH4 0 V / 0 A, CH3 back at 12 V / 2 A. Not run: VXI-11, USB, `*TST?`, a protection trip, `OUTPut:TRACK` with an output on, `OUTPut:ALL?` with mixed states. One change outside the tool, at the owner's request: key sound switched off (`SOUNd:KEY 0`; persistent instrument setting; alarm sound untouched).
+- What the hardware showed: (1) a setpoint written to CH2 in a coupled mode is the **combined** value, CH3 follows with half (SERIES `VOLTage CH2,20` -> CH2 20 / CH3 10; PARALLEL `CURRent CH2,5` -> 5 / 2.5, above the 3.232 A `MAX`), the `MAXimum` keyword stays per channel; (2) with an OFF delay `OUTPut CHn,0` **and** `OUTPut:ALL 0` keep the output live until the delay elapsed (`OUTPut?` -> 1), writing the delay 0 while pending switches off at once; (3) output on: the first reading is at the setpoint after ~295 ms (write latency), the open output decays below 20 mV in ~0.7 s after off; (4) the plug's write path and `tearDown()` work on hardware, panel unlocked; (5) invalid-channel writes change none of CH1-CH4; (6) the "empty error list" explanation of `*ESR?` bit 5 is refuted, `*ESR?` stays unusable.
+- Code and docs changed accordingly: the coupled-mode refusal is lifted for exactly the two verified writes (CH2 voltage in SERIES, CH2 current in PARALLEL; guard = model series/parallel rating) and kept for everything else (CH3, the other quantity of CH2), in `set_voltage`/`set_current`/`configure_channel`/`restore()`; fake: combined coupled writes with CH3 following, keywords per channel, numeric limit 2 x `MAX` (`ASSUMPTION(hw)`), OFF delay 0 switches a pending output off; markers for OFF delay and unlock resolved; `models.tested` is `True` for the SPD4323X (experiments 21 and 30 passed); SPEC.md, README ("Things the manual does not tell you" items 16-20, model table "tested over LAN (raw socket), firmware 4.1.2.9R1"), `docs/scpi_reference.md` annotated. `tearDown()` needed no change (the zero-the-OFF-delay-first order is now verified as necessary).
 
-## Blocked on hardware
-- 2026-10-04 Cloud session network check: a direct TCP connection from the cloud container to a non-HTTP port (5025) times out; only proxied HTTP(S) leaves the container. Hardware acceptance therefore runs on a machine on the supply's LAN (or one that can reach the forwarded port) following `docs/acceptance.md`, not from the cloud session.
-- The remaining `# ASSUMPTION(hw)` items (`grep -rn "ASSUMPTION(hw)" src`) and the still-open questions of `docs/scpi_reference.md` section 8. Run 1 closed questions 4, 5, 7, 9 (CH1), 13, 14, 20 and most of 1, 8, 12; the full table is in `docs/hardware_findings.md` "Still open". Summary:
+## In flight
+- Nothing. Next: a third, small hardware visit for the items below, then phase 2 candidates (LIST).
+
+## Open (needs hardware or another model)
+`grep -rn "ASSUMPTION(hw)" src` lists the remaining markers (protection `1` = tripped, ON/OFF delay clamp, `MODE` on CH1/CH4, `VOLTage?` without channel, numeric limit of a combined coupled write); the questions are in `docs/hardware_findings.md` "Still open after run 2":
 
 | open item | needs | marker / question |
 |---|---|---|
-| output on: settling, measurement refresh, `*OPC?`, `OUTPut:ALL?` with mixed states | output on, nothing connected | experiment 30, Q11 |
-| plug `tearDown()` path (`OUTPut CHn,0`, `OUTPut:ALL 0`, ON/OFF delay writes, `:SOURce:LOCK:STATe OFF`) | outputs off | plug write smoke (tool item 9.4) |
-| setpoint written to CH2/CH3 in SERIES/PARALLEL: combined or per half | outputs off | Q21, `# ASSUMPTION(hw): write side of question 21` (plug and fake); the plug refuses meanwhile |
-| OFF-delay semantics (`OUTPut?` while pending, `OUTPut:ALL 0` with delays) | output on | Q22, `# ASSUMPTION(hw): OUTPut? during OFF delay` (fake) |
-| `OUTPut:TRACK` rejected while an output is on | output on, owner decides | Q13 |
-| protection state `1` = tripped; state after a trip and `RESET:PROTect` | a deliberate trip | Q10, `# ASSUMPTION(hw): 1 means tripped` |
-| panel visibly unlocked after `tearDown()` | someone at the panel | Q12, `# ASSUMPTION(hw)` in `tearDown()` |
-| ON/OFF delay writes clamp like `OCP:DELay`; `MODE` on CH1/CH4 | outputs off | fake markers `same as OCP:DELay`, `not tried` |
-| `VOLTage?` without a channel: CH1 or panel-selected channel | panel state | Q8, fake marker |
-| effect of `VOLTage CH5,1` on CH4 (CH4 was not read back) | outputs off | Q8; ask the user to check CH4's setpoint |
 | USB identity and terminator, VXI-11, web, telnet | USB cable / direct LAN | Q2, Q3 |
+| protection state `1` = tripped; state after a trip and `RESET:PROTect` | a real trip (OCP needs a load; OVP without load is a deliberate fault) | Q10, `# ASSUMPTION(hw): 1 means tripped` |
+| `OUTPut:TRACK` rejected while an output is on | output on, owner decides (live output) | Q13 |
+| `OUTPut:ALL?` with mixed channel states | two outputs on, nothing connected | Q4 |
+| CH3 writes in a coupled mode, CH2 current in SERIES, CH2 voltage in PARALLEL, upper limit of a numeric combined write (`VOLTage CH2,40` SERIES, `CURRent CH2,7` PARALLEL) | outputs off; extend experiment 15 | Q21 remainder; the plug refuses these meanwhile |
+| ON/OFF delay clamp at 3600 s and below 0; `MODE` on CH1/CH4; `VOLTage?` without a channel (CH1 or panel channel) | outputs off, panel state | fake markers `same as OCP:DELay`, `not tried`, `CH1 or the panel-selected channel` |
 | SPD4121X, SPD4306X (CH4 `15/1`) | other models | Q14 |
+
+Tool state: `tools/hw_acceptance.py` ran without defects in run 2 (the run-1 fixes held: one reply line per command line, the extended experiments 15/19/21, CH4 in snapshot and restore). The cloud session cannot reach the instrument (raw TCP is blocked); hardware runs happen on a machine on the supply's LAN following `docs/acceptance.md`. On a network share `uv pip install` can fail on AppleDouble `._*` files and the share creates `._*.py` files that `test_source_has_no_factory_reset_or_unlisted_subsystems` trips over: delete them (`find . -name '._*' -not -path './.venv/*' -delete`).
 
 ## Out of scope for now
 - LIST, WAVE, STORAGE, CALIBRATE subsystems (phase 2 candidates: LIST).
-
-
-## Prompt for the local agent (hardware acceptance run 2)
-
-The cloud session cannot reach the instrument (raw TCP is blocked). The user
-starts Claude Code in a local clone on the supply's LAN and pastes this:
-
-```text
-You are taking over the siglent-spd-openhtf project for hardware acceptance run 2. You are the
-project-owner agent for this session: you may use the real power supply, with me present. Read
-CLAUDE.md, AGENTS.md, HANDOFF.md, SPEC.md, docs/acceptance.md (section 7 is the plan) and
-docs/hardware_findings.md (run 1) before anything else. Work on branch claude/stoic-cannon-bltu6t
-(git pull first; never push to another branch).
-
-Setup: uv venv --python 3.13 .venv && uv pip install --python .venv/bin/python -e '.[dev]' ;
-run .venv/bin/python -m pytest -q and confirm 323 tests pass before touching hardware. Ask me
-for the supply's IP and export PSU_HOST. Confirm with me that all outputs are off and nothing is
-connected to any output terminal before each hardware step; stop and ask if anything is unclear.
-
-Hardware steps, in this order, exactly as docs/acceptance.md section 7 describes:
-(a) .venv/bin/python tools/hw_acceptance.py --report run2.local.md   (outputs off)
-(b) only if (a) finished with a clean restore and after I confirm again that nothing is
-    connected: .venv/bin/python tools/hw_acceptance.py --only 30,31 --allow-output
-    --confirm-no-load --report run2_output.local.md
-(c) ask me to look at the front panel: is it unlocked? is CH4 still 0 V / 0 A? did CH3 return to
-    its original setpoints? Record my answers.
-Never send *RST, DEFault:RESET, FACTory:RESET, LAN/GPIB/STORage/CALibrate/WAVE/LIST commands;
-never turn an output on outside experiments 30/31; never edit the tool's SafetyPolicy to get past
-a refusal. Reports and logs are *.local.* files and stay out of git.
-
-Then analyse: read hw_acceptance.local.log and both reports line by line and add a "Run 2"
-section to docs/hardware_findings.md with the same structure as run 1 (answers per open
-question with quoted command -> raw reply evidence; verdict per remaining ASSUMPTION(hw) marker;
-required code changes). Use 192.0.2.10 for the IP and SPD43XXXXXXXXX for the serial in anything
-committed.
-
-Then fold the findings into the code and docs, following AGENTS.md: resolve every ASSUMPTION(hw)
-marker the run answered (plug and fake alike, replace by a "verified on SPD4323X, firmware
-4.1.2.9R1, <date>" comment), fix the fake so it reproduces the observed replies, add tests for
-each new behaviour, update README "Things the manual does not tell you", annotate
-docs/scpi_reference.md, amend SPEC.md where the contract changes (in particular: lift or keep the
-coupled-mode refusal for CH2/CH3 setpoints depending on what question 21's write side showed;
-OFF-delay handling in tearDown depending on question 22). Set models.tested=True for the
-SPD4323X only if experiments 21 and 30 both passed, and change the README model table to
-"tested over LAN (raw socket), firmware 4.1.2.9R1". Keep all AGENTS.md safety rules: read-back on
-every setter, no output on in tearDown/restore, outputs off by default. You may delegate coding
-to subagents and review with a stronger one if your setup allows; otherwise do it yourself.
-
-Done means: .venv/bin/ruff check src tests example_test.py tools, .venv/bin/ruff format --check
-on the same, .venv/bin/mypy src and .venv/bin/python -m pytest -q all pass; python
-example_test.py --fake exits 0; HANDOFF.md updated (run 2 done, what is still open: USB
-identity, a real protection trip, other models); commit in logical steps with descriptive
-messages, each ending with your own Co-Authored-By trailer; git push -u origin
-claude/stoic-cannon-bltu6t. Finish with a short summary for me: what the hardware showed, what
-changed, what is still open.
-```
