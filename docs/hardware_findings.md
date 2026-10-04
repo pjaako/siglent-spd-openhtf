@@ -652,3 +652,248 @@ Experiment 30 switches on CH1 only, at 1.0 V / 0.1 A, records the settling curve
 up to 3 s, switches off with read-back, and restores the snapshot. It does not cover Q22; the
 new experiments above should be added to the tool before the next session so that one visit
 answers everything that needs an output on.
+
+
+---
+---
+
+# Hardware findings: SPD4323X acceptance run 2
+
+| item | value |
+|---|---|
+| instrument | Siglent SPD4323X, serial `SPD43XXXXXXXXX` (placeholder) |
+| firmware | `4.1.2.9R1` |
+| date | 2026-10-04 (log times 20:34 to 20:36 for step a, 21:21 for step b; the owner was at the instrument) |
+| address | `192.0.2.10` in this document |
+| transport | PyVISA `@py`, `TCPIP::192.0.2.10::5025::SOCKET`, LF terminators, timeout 3000 ms, probe timeout 1500 ms |
+| step (a) | `tools/hw_acceptance.py --report run2.local.md`: experiments 1-6, 8, 10-21 (write tier, outputs off), exit clean, restore `36 items, 0 written back, 36 unchanged, 0 FAILED`, snapshot status `restored`, outputs `{1: 0, 2: 0, 3: 0, 4: 0}` at the end |
+| step (b) | `tools/hw_acceptance.py --only 30,31 --allow-output --confirm-no-load --report run2_output.local.md`: experiments 30 and 31 (CH1 on at 1.0 V / 0.1 A, nothing connected), `CH1 was switched on by this run; output off confirmed`, restore `36 items, 1 written back, 35 unchanged, 0 FAILED`, outputs all `0` at the end |
+| step (c), the owner at the front panel | panel **unlocked**; CH4 **0 V / 0 A**; CH3 back at **12 V / 2 A**, off |
+| not run | experiment 7 (VXI-11), `*TST?`, USB, web/telnet, protection trip, `OUTPut:TRACK` with an output on, `OUTPut:ALL?` with mixed states |
+| change outside the tool | at the owner's request the key sound was switched off (`SOUNd:KEY 0`, read back `0`; before: key sound `1`, alarm sound `1`, alarm sound untouched). This is a persistent instrument setting that neither the tool's snapshot nor the plug covers. It was sent with a one-off script, not by `tools/hw_acceptance.py` |
+
+Line references: "acc N" is line N of `hw_acceptance.local.log` of this visit (a single file: step (a) is
+lines 1-1432, step (b) lines 1433-1882; run 1's log is a different file, so "acc" numbers of run 1 and
+run 2 are not comparable). Quoted replies are the raw bytes as logged, the serial number replaced by the
+placeholder. The two reports are `run2.local.md` and `run2_output.local.md` (local, git-ignored).
+
+Timing summary (whole log, queries only, timeouts excluded):
+
+| situation | n | min | median | 90 % | max |
+|---|---|---|---|---|---|
+| query after a query | 1481 | 1.4 ms | 4.1 ms | 5.6 ms | 455.3 ms (a `LOCK?`) |
+| first query after a write | 167 | 5.0 ms | 258.7 ms | 294.9 ms | 412.3 ms |
+| `LOCK?` after a query | 22 | 2.5 ms | 33.4 ms | 246.3 ms | 455.3 ms |
+| `LOCK?` after a write | 19 | 164.4 ms | 261.4 ms | 329.2 ms | 391.0 ms |
+
+Same picture as run 1; the 5000 ms plug timeout keeps a factor 11 over the slowest reply. No `LATE` bytes.
+
+## Answers to the open questions
+
+### Q21 Series/parallel setpoint meaning (write side): answered
+
+**A setpoint written to CH2 is the combined value, and CH3 follows with half of it.** In SERIES the
+voltage written to CH2 is read back unchanged from CH2 (combined) and CH3 reads half; in PARALLEL the
+same for the current. The combined value is clamped at the per-channel `MAX` (1.01 x rating), **not** at
+the series or parallel rating of the manual (60 V / 6.4 A). OVP and OCP are untouched by every write.
+Both halves keep their value after returning to INDEPENDENT.
+
+```
+acc 684-685   W 'OUTPut:TRACK SERIES' -> 'OUTPut:TRACK?' -> b'1\n'
+acc 686-687   (SERIES) 'VOLTage? CH2' -> b'28.000000\n'  (CH2 was 14 V)   'CURRent? CH2' -> b'3.000000\n'
+acc 697-698   (SERIES) 'VOLTage? CH3' -> b'14.000000\n'                    'CURRent? CH3' -> b'3.100000\n'
+acc 735-739   W ':SOURce:VOLTage:SET CH2,20' -> ':SOURce:VOLTage:SET? CH2' -> b'20.000000\n'  216.3 ms
+                                                ':SOURce:VOLTage:SET? CH3' -> b'10.000000\n'
+acc 740-742   W ':SOURce:VOLTage:SET CH2,MAXimum' -> CH2 b'32.320000\n'  CH3 b'16.160000\n'
+acc 743-745   W ':SOURce:OVP CH2,MAXimum' -> ':SOURce:OVP? CH2' -> b'35.200001\n'  ':SOURce:OVP? CH3' -> b'35.200001\n'
+acc 759-761   W 'OUTPut:TRACK PARALLEL' -> b'2\n';  (PARALLEL) CH2 V b'16.160000\n' (the half kept from SERIES)
+              'CURRent? CH2' -> b'6.000000\n' (2 x 3 A)   'CURRent? CH3' -> b'3.000000\n'
+acc 764-766   W ':SOURce:CURRent:SET CH2,5' -> ':SOURce:CURRent:SET? CH2' -> b'5.000000\n'
+                                               ':SOURce:CURRent:SET? CH3' -> b'2.500000\n'
+acc 767-769   W ':SOURce:CURRent:SET CH2,MAXimum' -> CH2 b'3.232000\n'  CH3 b'1.616000\n'
+acc 770-771   W ':SOURce:OCP CH2,MAXimum' -> CH2 b'3.520000\n'  CH3 b'3.520000\n'
+acc 790-815   (after INDEPENDENT) CH2 V b'16.160000\n' I b'1.616000\n'; CH3 V b'16.160000\n' I b'1.616000\n'
+              (the tool then wrote CH2 14 V / 3 A and CH3 12 V / 2 A back, each read back)
+```
+
+(The line numbers above are those of the `OUTPut:TRACK`/`SET` lines, the replies are on the following
+lines of the log; the times are `20:35:36.055` to `20:35:38.876`.)
+
+Conclusions:
+- The write side is the **combined value**, so the guess in SPEC.md (and in the fake) was right: the
+  read-back of a CH2 write in SERIES equals what was written. A per-half interpretation would have read
+  back 40 for `VOLTage CH2,20`.
+- The clamp acts on the **combined** value at the per-channel maximum: `MAXimum` in SERIES gives 32.32 V
+  combined (16.16 V per half), in PARALLEL 3.232 A combined (1.616 A per half). A numeric write above the
+  maximum (for example `VOLTage CH2,40` in SERIES) was **not** tried, so whether the instrument accepts the
+  60 V series rating by number is unknown. The plug's guard stays at the per-channel rating (32 V / 3.2 A),
+  which is also what the instrument's `MAXimum` produces.
+- **CH3's reading in a coupled mode is the per-half value of CH2's write**; a write to CH3 in SERIES or
+  PARALLEL, the voltage of CH2 in PARALLEL and the current of CH2 in SERIES were **not** written. Those stay
+  open (the plug keeps refusing them).
+- The `3.100000` that `CURRent? CH3` shows in SERIES while CH2 is 3 A reproduced (acc 698, 733-735). It
+  is not an effect of the write (it is there before any write); the fake does not model it.
+- The half values persist: after the sequence CH2 and CH3 both read 16.16 V and 1.616 A in INDEPENDENT.
+  The tool restored CH2 and CH3 to 14 V / 3 A and 12 V / 2 A with read-back (acc 816-830, 1308-1330 and the
+  restore summary); the owner confirmed CH3 at 12 V / 2 A on the panel.
+
+### Q22 Output OFF delay semantics: answered
+
+With a non-zero OFF delay (2 s) **`OUTPut? CHn` keeps answering `1` and the output keeps delivering
+voltage until the delay has elapsed**, for `OUTPut CHn,0` and for `OUTPut:ALL 0` alike. Setting the delay
+to 0 while the switch-off is pending turns the output off at once. Times relative to the OFF command:
+
+| case (delay 2 s, CH1 1.0 V, no load) | `OUTPut? CH1` | `MEASure:VOLTage? CH1` |
+|---|---|---|
+| A `OUTPut CH1,0` | `1` until 1.91 s, `0` from 2.01 s | 0.999 V until 2.01 s, 0.862 V at 2.12 s, below 0.1 V at 2.60 s |
+| B `OUTPut:ALL 0` | `1` until ~1.9 s, `0` from 2.008 s | 0.999 V until ~2.0 s, 0.770 V at the first sample after, below 0.1 V at 2.60 s |
+| C `OUTPut CH1,0`, then `OUTPut:OFF:DELay CH1,0` at 0.50 s | `1` until 0.50 s, `0` at 0.547 s (46 ms after the write) | 0.999 V, 0.663 V from 0.55 s, below 0.1 V at 1.10 s |
+
+```
+acc 1652-1655  W 'OUTPut:OFF:DELay CH1,2' -> 'OUTPut:OFF:DELay? CH1' -> b'2.000000\n'  122.6 ms;  W 'OUTPut CH1,1'
+acc 1657-1660  W 'OUTPut CH1,0' -> 'OUTPut? CH1' -> b'1\n' 14 ms ... b'1\n' at 21:21:21.76 ... b'0\n' at 21:21:22.82
+acc 1658-1666  W 'OUTPut:ALL 0' -> 'OUTPut? CH1' -> b'1\n' 0.250 s ... b'0\n' 2.008 s
+acc 1728-1740  W 'OUTPut CH1,0' -> b'1\n'; W 'OUTPut:OFF:DELay CH1,0' -> 'OUTPut? CH1' -> b'0\n'  46.1 ms
+```
+
+Consequences for the plug: the order in `tearDown()` (zero a non-zero OFF delay of every channel that is
+on, then `OUTPut:ALL 0`) is **necessary**: without it `OUTPut:ALL 0` leaves the DUT powered for the delay
+time and the per-channel read-back would find `1`. Zeroing the delay while the switch-off is pending
+(case C) is also a valid way out. No code change; the assumption of the fake is confirmed.
+
+### Q11 Timing, settling, `*OPC?` after output on: answered (no load)
+
+- First `MEASure:VOLTage? CH1` after `OUTPut CH1,1` (V set 1.0 V, I 0.1 A): `0.999164` after **294.9 ms**
+  (the query is held for the write, like every query after a write); there was **no ramp to observe** at
+  that resolution: all 11 samples are within 1 mV of the final value. `*OPC?` -> `1` in 2.3 ms,
+  `OUTPut? CH1` -> `1`. Run mode `CV`; current `0.000230`, power `0.000229` (offsets, nothing connected).
+- The reading is a flickering plateau (`0.998909` / `0.999164`, one 0.25 mV step), i.e. the ADC noise at
+  the 0.25 mV level; the measurement repeats the identical value for several 50 ms samples, so it
+  refreshes slower than the query rate (every 50 to 100 ms in the OFF decay, where values repeat in pairs).
+- Switching off without a delay: `OUTPut? CH1` -> `0` after 182.6 ms (query held for the write); the
+  voltage of the open output decays through `0.961716`, `0.363061`, `0.268550` ... to `0.006416` in about
+  1 s (the output stage discharging, no load): below 20 mV at 0.70 s.
+- `OUTPut:ALL?` with mixed states was **not** queried (only the all-off `0` at the start). Still open.
+
+```
+acc 1490-1493  W 'OUTPut CH1,1' -> 'MEASure:VOLTage? CH1' -> b'0.999164\n' 294.9 ms; '*OPC?' -> b'1\n' 2.3 ms; 'OUTPut? CH1' -> b'1\n'
+acc 1504-1506  'MEASure:CURRent? CH1' -> b'0.000230\n';  'MEASure:POWER? CH1' -> b'0.000229\n';  'MEASure:RUN:MODE? CH1' -> b'CV\n'
+acc 1507-1510  W 'OUTPut CH1,0' -> 'OUTPut? CH1' -> b'0\n' 182.6 ms; 'MEASure:VOLTage? CH1' -> b'0.961716\n', b'0.363061\n'
+```
+
+`wait_for_voltage` defaults (tolerance 0.05 V, timeout 5 s, interval 0.1 s) are adequate for an
+unloaded output; a capacitive DUT is the DUT's business.
+
+### Q6 Error reporting: the "empty error list" hypothesis is not supported
+
+The sequence `*CLS`, `VOL? CH1`, `*ESR?`, `VOL? CH1`, `*ESR?`, `*CLS`, `VOL? CH1`, `*ESR?` answered
+`32`, `32`, `32`: bit 5 is set by **every** unanswered unknown header in this phase, also the second one
+without a `*CLS` in between (acc 1072-1078). So the explanation of run 1 (bit 5 only for an empty error
+list) does not hold. What remains unexplained: in the read-only tier an unknown query raised no bit twice
+(acc 280-285: `FOOBar? CH1` -> `*ESR?` `0`; `VOLTage? CH5` -> `0`), right after an `*ESR?` that read `32`
+(acc 278), the same pattern as in run 1. Invalid-channel writes, a non-numeric value and a clamped value
+still raise nothing (`VOLTage CH5,1`, `VOLTage CH0,1`, `VOLTage CH1,abc`, 125 % of the rating: `*ESR?` `0`,
+`*STB?` `0` each, acc 1026-1066). **`*ESR?` stays unusable as an error channel; read-back stays the only
+check.** No code change: the fake already sets bit 5 on every unknown or unanswered query.
+
+```
+acc 1068-1070  'FOOBar? CH1' -> VI_ERROR_TMO;  '*ESR?' -> b'32\n';  '*STB?' -> b'0\n'
+acc 1072-1078  'VOL? CH1' -> TMO;  '*ESR?' -> b'32\n';  'VOL? CH1' -> TMO;  '*ESR?' -> b'32\n';  *CLS;  'VOL? CH1' -> TMO;  '*ESR?' -> b'32\n'
+acc 278-285    '*ESR?' -> b'32\n';  'FOOBar? CH1' -> TMO;  '*ESR?' -> b'0\n';  'VOLTage? CH5' -> TMO;  '*ESR?' -> b'0\n'
+```
+
+### Q8 Invalid channel write and CH4: answered
+
+`VOLTage CH5,1` and `VOLTage CH0,1` change **none of the four channels**; CH4 was read back before and
+after (voltage and current, `0.000000` each) and the owner saw 0 V / 0 A on the panel afterwards. The
+write is silently ignored. `VOLTage?` without a channel answered `5.000000` again, which is CH1's value
+(CH1 5 V, CH2 14 V, CH3 12 V, CH4 0 V); still not decidable whether that is "CH1" or the panel-selected channel.
+`MODE? CH1` -> `0`, `MODE? CH4` and `MODE CH1|CH4,<x>` were not tried.
+
+### Q12 Remote lock and the plug's tearDown(): answered
+
+- The plug's `tearDown()` against the real supply (experiment 21, outputs off, `restore_state=True`):
+  per channel `OUTPut? CHn` -> `0`, `OUTPut:ALL 0` (acc 1261) -> all four channels read `0`, the changed
+  values were restored with read-back, `:SOURce:LOCK:STATe OFF` (acc 1315) -> `:SOURce:LOCK:STATe?` -> `0`
+  (269.0 ms), `LOCK?` -> `0`. **The owner confirmed the front panel unlocked** afterwards (no lock icon,
+  keys usable). Same after the tool's own `LOCK 0` at the end of every experiment (acc 1572-1573).
+- The write path of the plug ran as written: `OUTPut:ON:DELay CH1,0.5` -> `OUTPut:ON:DELay? CH1` ->
+  `0.500000`; `OUTPut:OFF:DELay CH1,0.5` -> `0.500000`; `MODE CH2,4W` -> `1`; `MODE CH2,2W` -> `0`; delays
+  back to `0.000000` (acc 1245-1255). No exception, nothing left over, CH1-CH4 equal to the snapshot.
+
+```
+acc 1245-1253  W 'OUTPut:ON:DELay CH1,0.5' -> b'0.500000\n' 260.2 ms;  W 'OUTPut:OFF:DELay CH1,0.5' -> b'0.500000\n';
+               W 'MODE CH2,4W' -> 'MODE? CH2' -> b'1\n';  W 'MODE CH2,2W' -> b'0\n'
+acc 1261-1264  W 'OUTPut:ALL 0' -> 'OUTPut? CH1' -> b'0\n' 271.6 ms ... CH4 b'0\n'
+acc 1315-1316  W ':SOURce:LOCK:STATe OFF' -> ':SOURce:LOCK:STATe?' -> b'0\n' 269.0 ms
+```
+
+### Q9 (rest): ON/OFF delay writes
+
+`OUTPut:ON:DELay` and `OUTPut:OFF:DELay` writes accept `0.5`, `2` and `0` and read back `0.500000`,
+`2.000000`, `0.000000`. Whether they clamp at 3600 s and at 0 like `OCP:DELay` was **not** tried (marker
+stays, text narrowed).
+
+### Q13 `OUTPut:TRACK` with an output on: not tested
+
+Needs an output on while changing the coupling (a live output); not done. Open, owner's decision.
+
+### Q10 protection trip: not tested
+
+No trip was provoked (nothing connected, no deliberate OVP/OCP fault). `1` = tripped stays an assumption.
+
+### Other observations
+- Run 1's findings reproduced without exception: forms (E3, E20), clamping (E10-E14), track/sense numbers
+  (E15, E16), `LOCK` behaviour (E17), `*IDN?;*OPC?` now answered as one line `...4.1.2.9R11` by the fixed
+  `Link.query` (acc 172-174 equivalent: no timeout), the `;` chains in E18.
+- The `LOCK?` after the `LOCK 0` write still takes 164-391 ms; irrelevant for the plug.
+- The owner heard key beeps on every remote write (the supply beeps on the first remote command after
+  idle); `SOUNd:KEY 0` switched that off. It is a convenience of the test bench, not something the plug
+  should do.
+
+## Verdict on every remaining `ASSUMPTION(hw)` marker
+
+| marker | where | verdict | evidence |
+|---|---|---|---|
+| write side of question 21 | plug `_require_independent`, `restore()`; fake `_do_write` | **answered**: CH2's write is the combined value, CH3 follows half; clamp on the combined value at the per-channel `MAX`. CH3 writes, CH2 current in SERIES and CH2 voltage in PARALLEL **still untested** | acc 735-771 |
+| `OUTPut?` during OFF delay | fake `_set_output` | **confirmed** (also for `OUTPut:ALL 0`); plus: delay 0 while pending switches off at once, which the fake lacked | cases A, B, C |
+| unlock needed / panel visibly unlocked | plug `tearDown()` | **confirmed** (SCPI and panel) | acc 1315-1316, owner |
+| protection state `1` = tripped | plug `protection_status`; fake | **still open** (no trip) | - |
+| same as `OCP:DELay` (ON/OFF delay clamp) | fake `_limits` | **still open** (0.5, 2, 0 accepted; clamps untried) | acc 1245-1255 |
+| `MODE` on CH1/CH4 not tried | fake | **still open** | - |
+| CH1 or the panel-selected channel (`VOLTage?`) | fake | **still open** | acc `VOLTage?` -> `5.000000` |
+
+## Required code changes
+
+1. **plug.py**
+   1. Replace `_require_independent` by a check that allows, in a coupled mode, exactly the two verified
+      writes: CH2 voltage in SERIES, CH2 current in PARALLEL (combined value, read-back verified, guard at
+      the per-channel rating). Everything else on CH2/CH3 in a coupled mode keeps raising `RuntimeError`
+      (message names question 21 and says which combination is untested). `configure_channel` applies the
+      same check per item; `restore()` restores the verified quantity and reports the rest as skipped.
+   2. Resolve the unlock marker in `tearDown()`; add the OFF-delay evidence to the `tearDown()` comment.
+   3. `models.SPD4323X.tested = True` (experiments 21 and 30 passed).
+2. **fake_resource.py** (each with a test)
+   1. Coupled write of the combined quantity: clamp the combined value to `[0, MAX]`, store half in CH2
+      **and CH3** (CH3 follows), also for `MINimum`/`MAXimum`/`DEFault` (combined, then halved).
+   2. Setting the OFF delay to 0 while a switch-off is pending switches the output off at once.
+   3. Replace the OFF-delay and unlock markers by `verified ...` comments; narrow the delay-clamp marker.
+3. **tests**: coupled writes in SERIES/PARALLEL through plug and fake (combined read-back, CH3 half, clamp,
+   keywords), remaining refusals, restore in a coupled mode, `OUTPut:ALL 0` with an OFF delay,
+   delay 0 while pending, `models.tested`.
+4. **docs**: SPEC.md (coupled modes, fake paragraph, `tested`, Done-means), README ("Things the manual does
+   not tell you", model table), `docs/scpi_reference.md` annotations, HANDOFF.md.
+
+## Still open after run 2
+
+| item | needs |
+|---|---|
+| USB identity and USB terminator (Q2) | a USB cable |
+| VXI-11, web, telnet (Q3) | a direct LAN path |
+| protection state `1` = tripped, state after a trip and after `RESET:PROTect` (Q10) | a real trip (OCP needs a load; OVP trip without a load is a deliberate fault) |
+| `OUTPut:TRACK` while an output is on (Q13) | owner's decision (live output) |
+| `OUTPut:ALL?` with mixed channel states | two outputs on, nothing connected |
+| CH3 writes in a coupled mode, CH2 current in SERIES, CH2 voltage in PARALLEL, a numeric write above the combined `MAX` | outputs off is enough: a small extension of experiment 15 |
+| ON/OFF delay clamp at 3600 s | outputs off is enough |
+| `MODE` on CH1/CH4, `VOLTage?` without channel (CH1 vs panel channel) | outputs off, panel state |
+| SPD4121X, SPD4306X (Q14) | other models |
