@@ -1,0 +1,18 @@
+# AGENTS.md
+
+OpenHTF plug for Siglent SPD4000X power supplies (tested on SPD4323X). Read `SPEC.md`; it is the contract.
+
+- The only source of truth for SCPI commands is `docs/scpi_reference.md`, transcribed from `docs/SPD4000X_UserManual_E01C.pdf`. Never use a command, parameter or response format from another Siglent model or from another project. If a command you need is not in that file, stop and say so.
+- Everything the manual leaves open is listed in `docs/scpi_reference.md` section 8. Where this project depends on an answer, the assumption is marked `# ASSUMPTION(hw): ...` in the source and implemented the same way in the fake. Hardware acceptance resolves them one by one; each answer goes into README "Things the manual does not tell you", and the fake is corrected to match.
+- Coder agents never touch the real power supply; they use `siglent_spd_openhtf.fake_resource.FakeSpdResource`. Only the project-owner agent uses the real instrument, with the user informed, and always through code that turns the outputs off in `finally:`/`tearDown()`. Never change the supply's LAN settings over LAN. Never send `FACTory:RESET`.
+- A power supply can destroy a device under test. Every setter reads its value back; the plug never turns an output on in `tearDown()` or `restore()`; `tearDown()` turns all outputs off by default. Do not weaken these to make a test pass.
+- Do not reinvent transports: PyVISA (`@py` backend) handles USBTMC, VXI-11 and the raw socket on port 5025.
+- Python 3.13, package in `src/siglent_spd_openhtf/`, installed editable with `uv pip install -e .[dev]`. Do not add dependencies beyond `pyproject.toml`.
+- Everything must run without hardware: `pytest -q`, `python example_test.py --fake`. `ruff check .`, `ruff format --check .` and `mypy src` must stay clean.
+- A fake instrument only knows what we told it (lesson from the sibling project rigol-dho-openhtf: acceptance on the real instrument found defects the fake-based tests could not). Every feature gets a run on hardware before it is called done, and each finding goes back into the fake.
+- Set OpenHTF config keys after importing the plug module (`CONF.load(...)` before the key is declared is lost).
+- File and module naming mirrors https://github.com/pjaako/rigol-dho-openhtf (`SPEC.md`, `AGENTS.md`, `fake_resource.py`, `example_test.py`, `tests/test_plug.py`). Keep it that way so agents can move between the two repos. Shared code is not extracted into a common package until both plugs exist and the duplication is visible.
+- This repository is public. Addresses in text are documentation examples (`192.0.2.x`), serial numbers are placeholders. Real addresses, serial numbers and private dumps stay out of git. Hardware tools take the supply address from the environment variable `PSU_HOST`.
+- Git: develop on the branch the session was given, commit with a descriptive message, and end every commit message with the co-author trailer `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>` and the session link, when the harness provides them. Do not put model identifiers anywhere else in the repository.
+- Roles: the project-owner agent writes specs, delegates coding to cheaper agents (Sonnet class), has the result reviewed by a stronger agent (Opus class) where it matters, and keeps `SPEC.md`, `AGENTS.md`, `README.md` and `docs/` current enough that a cold agent can take over at any commit. `docs/research.md` records why this project exists and what it borrows from.
+- Status for a cold agent is in `HANDOFF.md` (committed in this repo, unlike the sibling project): what is done, what is in flight, what is blocked on hardware.
