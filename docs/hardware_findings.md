@@ -674,7 +674,9 @@ answers everything that needs an output on.
 
 Line references: "acc N" is line N of `hw_acceptance.local.log` of this visit (a single file: step (a) is
 lines 1-1432, step (b) lines 1433-1882; run 1's log is a different file, so "acc" numbers of run 1 and
-run 2 are not comparable). Quoted replies are the raw bytes as logged, the serial number replaced by the
+run 2 are not comparable). A redacted copy (serial number and address replaced by the placeholders, same
+line numbers) is committed as [`docs/evidence/run2_hw_acceptance.log`](evidence/run2_hw_acceptance.log); the
+reports are [`run2_report.md`](evidence/run2_report.md) and [`run2_output_report.md`](evidence/run2_output_report.md). Quoted replies are the raw bytes as logged, the serial number replaced by the
 placeholder. The two reports are `run2.local.md` and `run2_output.local.md` (local, git-ignored).
 
 Timing summary (whole log, queries only, timeouts excluded):
@@ -915,7 +917,7 @@ No trip was provoked (nothing connected, no deliberate OVP/OCP fault). `1` = tri
 | result | clean restore (`36 items, 0 written back, 36 unchanged, 0 FAILED`, snapshot `restored`), all outputs `0` at the end, `MODE? CH1` and `MODE? CH4` back at `0`, track back to INDEPENDENT |
 | not run | everything that needs an output on (see "Still open after the addendum") |
 
-"acc3 N" is line N of the `hw_acceptance.local.log` of this visit (a new file; the log of run 2 is kept locally as `hw_acceptance_run2.local.log`, which is what "acc N" above refers to). Replies are raw, serial number not involved.
+"acc3 N" is line N of the `hw_acceptance.local.log` of this visit (a new file; the log of run 2 is what "acc N" above refers to). Redacted copies: [`docs/evidence/run2_addendum_hw_acceptance.log`](evidence/run2_addendum_hw_acceptance.log) and the report [`run2_addendum_report.md`](evidence/run2_addendum_report.md); run 2's log is [`docs/evidence/run2_hw_acceptance.log`](evidence/run2_hw_acceptance.log). Replies are raw, serial number not involved.
 
 ## Q21 (rest): coupled modes, what was not tried before
 
