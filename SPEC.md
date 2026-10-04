@@ -123,31 +123,41 @@ CONF.declare('siglent_spd_restore_state', default_value=False,
 Read-back after every set is mandatory. The manual defines no error query, so a
 clamped or ignored value is only detectable by reading it back.
 
+Command-form rule: send every command in the exact form the manual prints in
+its *example* for that command (leading colon, `SOURce` prefix, `:SET` node and
+keyword spelling included), not a shortened form. The manual's grammar allows
+short forms, but it also says a command without `[:SET]` "will operate on the
+current channel", so until hardware acceptance verifies channel addressing the
+verbatim example form is the only safe one. Mark the one place that builds
+command strings with `# ASSUMPTION(hw): channel addressing / optional nodes`.
+Where the manual prints no example for a form (e.g. a query), derive it from the
+printed example of the paired set form.
+
 ### Identity and state
 
 | method | SCPI (exactly as written) | returns |
 |---|---|---|
 | `idn()` | `*IDN?` | `Identity`, split on `,`, 4 fields; fewer fields -> `RuntimeError` |
 | `opc()` | `*OPC?` | `str` |
-| `snapshot()` | per channel: `VOLTage? CHn`, `CURRent? CHn`, `OVP? CHn`, `OCP? CHn`, `OCP:STATe? CHn`, `OCP:DELay? CHn`, `OUTPut? CHn`; plus `OUTPut:TRACK?` | `dict` |
-| `restore(snapshot)` | writes back setpoints, OVP, OCP, OCP state, OCP delay and track mode with read-back; **never writes `OUTPut CHn,1`**; collects every failure and raises one `RuntimeError` listing them at the end | `None` |
+| `snapshot()` | per channel: voltage, current, OVP, OCP, OCP state, OCP delay, ON delay, OFF delay, output state; plus track mode | `dict` |
+| `restore(snapshot)` | writes back track mode first (only if it differs), then per channel setpoints, OVP, OCP, OCP state, OCP delay, ON/OFF delays, with read-back; **never writes `OUTPut CHn,1`**; **skips every channel whose output is currently on** and, if the track restore failed, also CH2 and CH3, naming the skipped channels in the error; collects every failure and raises one `RuntimeError` listing them at the end | `None` |
 
 ### Output
 
 | method | SCPI | notes |
 |---|---|---|
-| `set_voltage(ch, volts)` | `VOLTage CHn,<v>` then `VOLTage? CHn` | `ValueError` if `volts < 0` or above the channel rating when the model is known (see guard rule) |
-| `voltage_setpoint(ch)` | `VOLTage? CHn` | `float` |
-| `set_current(ch, amps)` | `CURRent CHn,<a>` then `CURRent? CHn` | same guard |
-| `current_setpoint(ch)` | `CURRent? CHn` | `float` |
-| `set_output(ch, on: bool)` | `OUTPut CHn,1` / `OUTPut CHn,0` then `OUTPut? CHn` | |
+| `set_voltage(ch, volts)` | `:SOURce:VOLTage:SET CHn,<v>` then `:SOURce:VOLTage:SET? CHn` | `ValueError` if `volts < 0` or above the channel rating when the model is known (see guard rule) |
+| `voltage_setpoint(ch)` | `:SOURce:VOLTage:SET? CHn` | `float` |
+| `set_current(ch, amps)` | `:SOURce:CURRent:SET CHn,<a>` then `:SOURce:CURRent:SET? CHn` | same guard |
+| `current_setpoint(ch)` | `:SOURce:CURRent:SET? CHn` | `float` |
+| `set_output(ch, on: bool)` | `OUTPut CHn,1` / `OUTPut CHn,0` then `OUTPut? CHn` | `on` must be a `bool` (or the ints 0/1); any other type or value raises `ValueError` before anything is sent. Same for every other boolean setter. |
 | `output(ch)` | `OUTPut? CHn` | `bool` from `0`/`1` |
 | `set_all_outputs(on)` | `OUTPut:ALL 1` / `OUTPut:ALL 0` then `OUTPut? CHn` for every channel | verification is per channel: the all-channel query format is undocumented |
 | `all_outputs_off()` | `set_all_outputs(False)` | |
 | `set_output_delay(ch, on_s=None, off_s=None)` | `OUTPut:ON:DELay CHn,<s>` / `OUTPut:OFF:DELay CHn,<s>` with read-back | 0..3600 else `ValueError` |
 | `configure_channel(ch, *, voltage=None, current=None, ovp=None, ocp=None, ocp_enabled=None, ocp_delay=None)` | the corresponding setters, in this order: ovp, ocp, ocp_delay, ocp_enabled, voltage, current | attempts all items, raises one `RuntimeError` listing every failure |
 
-Guard rule: when `self.model` is known and the channel is CH1 or CH4, or the
+Guard rule (`# ASSUMPTION(hw): series/parallel setpoint is the combined value on CH2`): when `self.model` is known and the channel is CH1 or CH4, or the
 track mode last read is INDEPENDENT, the setter rejects values above the
 independent rating with `ValueError` before anything is sent. For CH2/CH3 in
 series or parallel mode use the series/parallel rating. The plug caches the
@@ -157,12 +167,12 @@ track mode from `track()`/`set_track()` and reads it once lazily when needed.
 
 | method | SCPI | notes |
 |---|---|---|
-| `set_ovp(ch, volts)` / `ovp(ch)` | `OVP CHn,<v>` with `OVP? CHn` | |
-| `set_ocp(ch, amps)` / `ocp(ch)` | `OCP CHn,<a>` with `OCP? CHn` | |
-| `set_ocp_enabled(ch, on)` / `ocp_enabled(ch)` | `OCP:STATe CHn,1|0` with `OCP:STATe? CHn` | |
+| `set_ovp(ch, volts)` / `ovp(ch)` | `:SOURce:OVP CHn,<v>` with `:SOURce:OVP? CHn` | |
+| `set_ocp(ch, amps)` / `ocp(ch)` | `:SOURce:OCP CHn,<a>` with `:SOURce:OCP? CHn` | |
+| `set_ocp_enabled(ch, on)` / `ocp_enabled(ch)` | `:SOURce:OCP:STATe CHn,1|0` with `:SOURce:OCP:STATe? CHn` | the manual example has a space after the comma (`CH1, 1`); send without the space, mark `# ASSUMPTION(hw): no space` |
 | `set_ocp_delay(ch, s)` / `ocp_delay(ch)` | `OCP:DELay CHn,<s>` with `OCP:DELay? CHn` | 0..3600 |
-| `protection_status(ch)` | `OVP:PROTect:STATe? CHn`, `OCP:PROTect:STATe? CHn` | `ProtectionStatus`; `1` = tripped `# ASSUMPTION(hw)` |
-| `clear_protection(ch)` | `RESET:PROTect CHn` | no read-back possible; afterwards query `protection_status` and raise `RuntimeError` if still tripped |
+| `protection_status(ch)` | `:SOURce:OVP:PROTect:STATe? CHn`, `:SOURce:OCP:PROTect:STATe? CHn` | `ProtectionStatus`; `1` = tripped `# ASSUMPTION(hw)` |
+| `clear_protection(ch)` | `:SOURce:RESET:PROTect CHn` | no read-back possible; afterwards query `protection_status` and raise `RuntimeError` if still tripped |
 
 There is no OVP enable command in the manual; do not invent one.
 
@@ -190,11 +200,16 @@ There is no OVP enable command in the manual; do not invent one.
 
 | method | SCPI |
 |---|---|
-| `set_lock(on)` / `locked()` | `LOCK 1|0` with `LOCK?` |
+| `set_lock(on)` / `locked()` | `:SOURce:LOCK:STATe ON|OFF` with `:SOURce:LOCK:STATe?` |
 | `tearDown()` | see below |
 
 `tearDown()`:
-1. If `outputs_off_on_teardown`: `all_outputs_off()`.
+1. If `outputs_off_on_teardown`: for every channel whose output is on, query the
+   OFF delay and, if it is not 0, write `OUTPut:OFF:DELay CHn,0` with read-back
+   and log a warning (a delayed switch-off would leave the DUT powered after the
+   test ends). Then `all_outputs_off()`; if `OUTPut:ALL 0` fails, fall back to
+   `OUTPut CHn,0` per channel. If this step failed with a transport error, skip
+   step 2 (each restore write would wait for its own timeout).
 2. If `restore_state` and a snapshot exists: `restore(snapshot)`.
 3. `set_lock(False)` (the panel locks itself under remote control; hand the
    front panel back). `# ASSUMPTION(hw): needed`.
@@ -233,15 +248,16 @@ No `pyvisa` import. Constructor:
   `'1'`/`'0'`, `OUTPut:TRACK?` and `MODE?` return the number, `MEASure:RUN:MODE?`
   returns `CV` or `CC`, `*IDN?` returns `Siglent Technologies,<model>,<serial>,<firmware>`,
   `*OPC?` returns `1`.
-- Setting a voltage/current/OVP/OCP above the rating of the channel (per
-  `models.py`, honoring track mode for CH2/CH3) **clamps to the rating**
-  (`# ASSUMPTION(hw): clamping`), negative values clamp to 0, so that a plug
-  without read-back verification would silently pass.
+- Setting a voltage/current above the rating of the channel (per `models.py`,
+  honoring track mode for CH2/CH3) **clamps to the rating**; OVP/OCP clamp to
+  the panel range 0.1x..1.1x rating (`# ASSUMPTION(hw): clamping`); negative
+  voltage/current clamp to 0; so that a plug without read-back verification
+  would silently pass.
 - `loads`: `dict[int, float | None]` ohms per channel, default `None` = open
   circuit. Measurement model when output is on: open circuit -> V = setpoint,
   I = 0, mode CV; with load R: I = V/R; if I > current setpoint then CC with
   I = Iset and V = Iset*R. Output off -> V = 0, I = 0. P = V*I. If OCP is
-  enabled and I >= OCP value, set `ocp_tripped` and turn the output off
+  enabled and I >= OCP value (including OCP value 0 with I = 0), set `ocp_tripped` and turn the output off
   (ignore the delay). If measured V > OVP, set `ovp_tripped` and turn the
   output off. `RESET:PROTect` clears both flags.
 - `OUTPut:TRACK <x>` accepts `0|1|2|INDEPENDENT|SERIES|PARALLEL`.
@@ -279,8 +295,11 @@ PASS, 1 otherwise.
 
 ## 7. README.md
 
-Usage snippet first (10 lines), then: supported models table with a clear
-"tested only on SPD4323X" statement, install (`uv venv` + `uv pip install -e .[dev]`),
+Usage snippet first (10 lines), then: supported models table stating that the
+SPD4323X is the target and that hardware acceptance is pending (change to
+"tested" only after `docs/acceptance.md` has been run), never stating an
+unverified transport or behaviour as fact (USBTMC, VXI-11 and the unlock step
+are unverified; only socket port 5025 is documented), install (`uv venv` + `uv pip install -e .[dev]`),
 transport/resource-name examples with RFC 5737 addresses (`192.0.2.10`),
 teardown policy and CONF keys, running tests and `--fake`, a "Things the manual
 does not tell you" section that is empty until hardware acceptance fills it,
@@ -294,5 +313,7 @@ links to `docs/scpi_reference.md`, `SPEC.md`, `AGENTS.md`, licence.
   (`grep` each one; a reviewer will).
 - Every `# ASSUMPTION(hw)` in the spec is present in the source at the place
   where the assumption is made.
+- CI runs on every Python version the README claims (3.11 and 3.13).
+- `HANDOFF.md` updated.
 - README written as in section 7.
 - No real VISA resource was opened.
