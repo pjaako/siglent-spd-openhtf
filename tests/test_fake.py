@@ -336,19 +336,95 @@ def test_coupled_modes_report_the_combined_value_on_ch2() -> None:
     assert fake.query('CURRent? CH2') == '3.000000'
 
 
-def test_writing_ch2_in_a_coupled_mode_stores_half_the_value() -> None:
-    # ASSUMPTION(hw): write side of question 21 (the combined value is written).
+def test_writing_ch2_in_a_coupled_mode_is_the_combined_value_and_ch3_follows() -> None:
+    # verified on SPD4323X, firmware 4.1.2.9R1, 2026-10-04 (docs/hardware_findings.md run 2, Q21)
     fake = FakeSpdResource()
+    fake.write('VOLTage CH2,14')
+    fake.write('CURRent CH2,3')
     fake.write('OUTPut:TRACK SERIES')
+    assert fake.query('VOLTage? CH2') == '28.000000'
     fake.write('VOLTage CH2,20')
     assert fake.query('VOLTage? CH2') == '20.000000'
-    assert fake.channels[2].voltage == 10.0
-    fake.write('CURRent CH2,2')  # the current is not combined in SERIES
-    assert fake.channels[2].current == 2.0
+    assert fake.query('VOLTage? CH3') == '10.000000'
+    fake.write('VOLTage CH2,MAXimum')  # clamped as a whole at the per-channel MAX
+    assert fake.query('VOLTage? CH2') == '32.320000'
+    assert fake.query('VOLTage? CH3') == '16.160000'
+    fake.write('OVP CH2,MAXimum')  # OVP and OCP stay per channel
+    assert (fake.query('OVP? CH2'), fake.query('OVP? CH3')) == ('35.200001', '35.200001')
+    fake.write('OUTPut:TRACK PARALLEL')
+    assert fake.query('VOLTage? CH2') == '16.160000'  # the half survives, not combined here
+    assert fake.query('CURRent? CH2') == '6.000000'
+    assert fake.query('CURRent? CH3') == '3.000000'
+    fake.write('CURRent CH2,5')
+    assert (fake.query('CURRent? CH2'), fake.query('CURRent? CH3')) == ('5.000000', '2.500000')
+    fake.write('CURRent CH2,MAXimum')  # the keyword is the per-channel MAX, 5 A above was accepted
+    assert (fake.query('CURRent? CH2'), fake.query('CURRent? CH3')) == ('3.232000', '1.616000')
+    fake.write('OCP CH2,MAXimum')
+    assert (fake.query('OCP? CH2'), fake.query('OCP? CH3')) == ('3.520000', '3.520000')
+    fake.write('OUTPut:TRACK INDEPENDENT')  # both halves keep their value
+    assert (fake.query('VOLTage? CH2'), fake.query('CURRent? CH2')) == ('16.160000', '1.616000')
+    assert (fake.query('VOLTage? CH3'), fake.query('CURRent? CH3')) == ('16.160000', '1.616000')
+
+
+def test_coupled_keywords_are_combined_too() -> None:
+    fake = FakeSpdResource()
+    fake.write('OUTPut:TRACK SERIES')
+    fake.write('VOLTage CH2,10')
+    fake.write('VOLTage CH2,MINimum')
+    assert (fake.query('VOLTage? CH2'), fake.query('VOLTage? CH3')) == ('0.000000', '0.000000')
+    fake.write('VOLTage CH2,10')
+    fake.write('VOLTage CH2,DEFault')
+    assert fake.query('VOLTage? CH2') == '0.000000'
+    fake.write('VOLTage CH2,-1')
+    assert fake.query('VOLTage? CH3') == '0.000000'
+
+
+def test_a_numeric_combined_write_may_exceed_the_per_channel_max() -> None:
+    # verified: 5 A written to CH2 in PARALLEL read back 5 A (docs/hardware_findings.md run 2);
+    # ASSUMPTION(hw): the numeric limit is twice MAX, which was not tried.
+    fake = FakeSpdResource()
     fake.write('OUTPut:TRACK PARALLEL')
     fake.write('CURRent CH2,5')
     assert fake.query('CURRent? CH2') == '5.000000'
-    assert fake.channels[2].current == 2.5
+    fake.write('CURRent CH2,9')
+    assert fake.query('CURRent? CH2') == '6.464000'
+    assert fake.query('CURRent? CH3') == '3.232000'
+
+
+def test_the_uncoupled_quantity_of_ch2_is_stored_per_channel() -> None:
+    # not tried on hardware: the current of CH2 in SERIES, the voltage of CH2 in PARALLEL
+    fake = FakeSpdResource()
+    fake.write('OUTPut:TRACK SERIES')
+    fake.write('CURRent CH2,2')
+    assert fake.channels[2].current == 2.0
+    assert fake.channels[3].current == 0.0
+
+
+def test_setting_the_off_delay_to_zero_switches_a_pending_output_off_at_once() -> None:
+    # verified on SPD4323X, firmware 4.1.2.9R1, 2026-10-04 (docs/hardware_findings.md run 2, Q22)
+    fake = FakeSpdResource()
+    fake.write('OUTPut:OFF:DELay CH1,2')
+    fake.write('OUTPut CH1,1')
+    fake.write('OUTPut CH1,0')
+    assert fake.query('OUTPut? CH1') == '1'  # pending
+    fake.write('OUTPut:OFF:DELay CH1,0')
+    assert fake.query('OUTPut? CH1') == '0'
+    assert fake.channels[1].off_remaining is None
+    fake.advance(5)
+    assert fake.query('OUTPut? CH1') == '0'
+
+
+def test_all_off_honours_the_off_delay_like_a_single_channel() -> None:
+    # verified on SPD4323X, firmware 4.1.2.9R1, 2026-10-04 (docs/hardware_findings.md run 2, Q22)
+    fake = FakeSpdResource()
+    fake.write('OUTPut:OFF:DELay CH1,2')
+    fake.write('OUTPut CH1,1')
+    fake.write('OUTPut:ALL 0')
+    assert fake.query('OUTPut? CH1') == '1'
+    fake.advance(1.9)
+    assert fake.query('OUTPut? CH1') == '1'
+    fake.advance(0.2)
+    assert fake.query('OUTPut? CH1') == '0'
 
 
 def test_entering_a_coupled_mode_copies_ch2_setpoints_to_ch3_for_good() -> None:

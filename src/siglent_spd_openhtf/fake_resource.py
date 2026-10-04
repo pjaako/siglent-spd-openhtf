@@ -302,8 +302,9 @@ class FakeSpdResource:
             return low * rating.voltage, high * rating.voltage, high * rating.voltage
         if keys == ('OCP',):
             return low * rating.current, high * rating.current, high * rating.current
-        # ASSUMPTION(hw): same as OCP:DELay. Only the OCP delay was exercised on hardware; the
-        # ON and OFF delay writes are assumed to clamp to the same 0..3600 s.
+        # ASSUMPTION(hw): same as OCP:DELay. The ON and OFF delay writes accepted 0, 0.5 and 2 s
+        # on hardware (docs/hardware_findings.md run 2) but their clamping was not tried; they
+        # are assumed to clamp to the same 0..3600 s as OCP:DELay.
         return 0.0, _MAX_DELAY_S, 0.0
 
     def _combined(self, ch: int) -> tuple[float, float]:
@@ -468,27 +469,47 @@ class FakeSpdResource:
                 number = default
             else:
                 return False  # not a number: nothing is set
+        coupled = ch == 2 and (
+            (keys == ('VOLT',) and self.track == 1) or (keys == ('CURR',) and self.track == 2)
+        )
+        keyword = self._number(value_arg) is None
+        # verified on SPD4323X, firmware 4.1.2.9R1, 2026-10-05 (docs/hardware_findings.md Q9):
+        # out-of-range values are clamped silently, never rejected or reported.
+        if coupled and not keyword:
+            # ASSUMPTION(hw): numeric upper clamp of a combined write. 5 A written to CH2 in
+            # PARALLEL was accepted (above the 3.232 A per-channel MAX), so the combined value
+            # may exceed MAX; twice MAX is assumed as the limit, which was not tried.
+            number = min(max(number, low), 2 * high)
         else:
-            # ASSUMPTION(hw): write side of question 21. In SERIES a number written to CH2's
-            # voltage (in PARALLEL to its current) is taken as the combined value and stored
-            # as value / 2 per half; OVP and OCP of CH2 stay per channel in the coupled
-            # modes. Not tried on hardware, see docs/hardware_findings.md Q21.
-            if ch == 2 and (
-                (keys == ('VOLT',) and self.track == 1) or (keys == ('CURR',) and self.track == 2)
-            ):
-                number /= 2
-            # verified on SPD4323X, firmware 4.1.2.9R1, 2026-10-05 (docs/hardware_findings.md
-            # Q9): out-of-range values are clamped silently, never rejected or reported.
             number = min(max(number, low), high)
+        if coupled:
+            # verified on SPD4323X, firmware 4.1.2.9R1, 2026-10-04 (docs/hardware_findings.md
+            # run 2, Q21): in SERIES a voltage written to CH2 (in PARALLEL a current) is the
+            # combined value: CH2 reads it back unchanged, each half stores half of it and CH3
+            # follows CH2. The MAXimum keyword is per channel (32.32 V resp. 3.232 A, taken as
+            # the combined value). Both halves keep the value after returning to INDEPENDENT.
+            # OVP and OCP stay per channel. Not tried: writes to CH3 in a coupled mode, the
+            # current of CH2 in SERIES and the voltage of CH2 in PARALLEL (stored per channel
+            # here).
+            number /= 2
+            setattr(self.channels[3], field, to_float32(number))
         setattr(state, field, to_float32(number))
+        if keys == ('OUTP', 'OFF', 'DEL') and number == 0 and state.off_remaining is not None:
+            # verified on SPD4323X, firmware 4.1.2.9R1, 2026-10-04 (docs/hardware_findings.md
+            # run 2, Q22): setting the OFF delay to 0 while a switch-off is pending switches
+            # the output off at once. A shorter non-zero delay was not tried; the pending
+            # countdown is left as it is.
+            state.output = False
+            state.off_remaining = None
         return True
 
     @staticmethod
     def _set_output(state: FakeChannel, on: bool) -> None:
-        # ASSUMPTION(hw): OUTPut? during OFF delay. Switching an output off that has a
-        # non-zero OFF delay leaves it on (OUTPut? keeps answering 1 and it keeps delivering
-        # power) until the delay has elapsed; advance() lets the time pass. Switching on again
-        # cancels the pending switch-off. The delay is read when the command arrives.
+        # verified on SPD4323X, firmware 4.1.2.9R1, 2026-10-04 (docs/hardware_findings.md run 2,
+        # Q22): switching an output off that has a non-zero OFF delay, with OUTPut CHn,0 and
+        # with OUTPut:ALL 0 alike, leaves it on (OUTPut? keeps answering 1 and it keeps
+        # delivering voltage) until the delay has elapsed; advance() lets the time pass.
+        # Switching on again cancelling the pending switch-off was not tried on hardware.
         if on:
             state.output = True
             state.off_remaining = None

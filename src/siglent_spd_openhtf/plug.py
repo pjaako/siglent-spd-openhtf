@@ -563,9 +563,9 @@ class SiglentSpdPlug(BasePlug):  # type: ignore[misc]
         and written only if it differs (a write costs about 250 ms on the instrument). A channel
         whose output is on is skipped (changing setpoints under a running DUT is not a restore),
         and so are CH2 and CH3 if the track restore failed. While the track mode is SERIES or
-        PARALLEL the voltage and current setpoints of CH2 and CH3 are skipped as well (open
-        question 21: the write side is unknown). Every skipped channel or item is named in the
-        error.
+        PARALLEL only the CH2 voltage (SERIES) or CH2 current (PARALLEL) is restored; the other
+        voltage and current setpoints of CH2 and CH3 are skipped (open question 21: their write
+        side is untested). Every skipped channel or item is named in the error.
         """
         failures: list[str] = []
         skipped: list[str] = []
@@ -623,17 +623,18 @@ class SiglentSpdPlug(BasePlug):  # type: ignore[misc]
                     values['off_delay'],
                 ),
             ]
-            if n in (2, 3) and mode is not TrackMode.INDEPENDENT:
-                # ASSUMPTION(hw): write side of question 21 (docs/scpi_reference.md section 8).
-                skipped.append(
-                    f'CH{n} voltage/current ({mode.value} mode: the write side of open '
-                    'question 21 is unknown)'
-                )
-            else:
-                items += [
-                    ('voltage', self.voltage_setpoint, self.set_voltage, values['voltage']),
-                    ('current', self.current_setpoint, self.set_current, values['current']),
-                ]
+            for label, key, get_item, set_item in (
+                ('voltage', 'voltage', self.voltage_setpoint, self.set_voltage),
+                ('current', 'current', self.current_setpoint, self.set_current),
+            ):
+                reason = self._coupled_write_refusal(n, label, mode)
+                if reason is None:
+                    items.append((label, get_item, set_item, values[key]))
+                else:
+                    skipped.append(
+                        f'CH{n} {label} ({mode.value} mode: write side of open question 21 '
+                        'untested)'
+                    )
             for label, getter, setter, value in items:
                 attempt(f'CH{n} {label}', partial(self._restore_item, n, getter, setter, value))
         if failures or skipped:
@@ -654,49 +655,69 @@ class SiglentSpdPlug(BasePlug):  # type: ignore[misc]
 
     # ---- limits -------------------------------------------------------------------------
 
-    def _rating(self, ch: int) -> ChannelRating | None:
+    def _rating(self, ch: int, quantity: str = '') -> ChannelRating | None:
         """Rated limit of a channel, None if the model is unknown.
 
         The guard stays at the rated value. The instrument itself accepts up to 1.01 x the
         rating (``VOLTage? CHn,MAX``, docs/hardware_findings.md Q9, Q14) and clamps silently
-        beyond; that 1 % is headroom, not a specification. The rating does not follow the
-        track mode: setpoints of CH2 and CH3 are refused in the coupled modes (see
-        ``_require_independent``).
+        beyond; that 1 % is headroom, not a specification. The one exception is the combined
+        setpoint of CH2 in a coupled mode (the voltage in SERIES, the current in PARALLEL):
+        it is the combined value (docs/hardware_findings.md run 2, Q21: 5 A written to CH2 in
+        PARALLEL read back 5 A), so its limit is the series or parallel rating of the model.
+        Every other write in a coupled mode is refused (see ``_coupled_write_refusal``).
         """
         if self.model is None:
             return None
+        if ch == 2 and quantity in ('voltage', 'current'):
+            mode = self._track if self._track is not None else self.track()
+            if mode is TrackMode.SERIES and quantity == 'voltage':
+                return self.model.series
+            if mode is TrackMode.PARALLEL and quantity == 'current':
+                return self.model.parallel
         return self.model.channels[ch - 1]
 
     def _guard_voltage(self, ch: int, volts: float) -> None:
-        rating = self._rating(ch)
+        rating = self._rating(ch, 'voltage')
         if rating is not None and volts > rating.voltage + _RATING_EPS:
             raise ValueError(f'{volts:g} V exceeds the {rating.voltage:g} V rating of CH{ch}')
 
     def _guard_current(self, ch: int, amps: float) -> None:
-        rating = self._rating(ch)
+        rating = self._rating(ch, 'current')
         if rating is not None and amps > rating.current + _RATING_EPS:
             raise ValueError(f'{amps:g} A exceeds the {rating.current:g} A rating of CH{ch}')
 
-    def _require_independent(self, ch: int, what: str) -> None:
-        """Refuse to write ``what`` on CH2/CH3 while they are coupled (series or parallel).
+    @staticmethod
+    def _coupled_write_refusal(ch: int, quantity: str, mode: TrackMode) -> str | None:
+        """Why a ``quantity`` ('voltage' or 'current') write on CH``ch`` is refused, or None.
 
-        In SERIES ``VOLTage? CH2`` answers the combined voltage (28 V with 14 V per half) but
-        nobody has written a setpoint in a coupled mode yet: a per-half write would double the
-        terminal voltage before the read-back could object, so nothing is sent. Lifted when the
-        extended experiment 15 has run (docs/hardware_findings.md Q21, docs/scpi_reference.md
-        section 8, question 21).
+        verified on SPD4323X, firmware 4.1.2.9R1, 2026-10-04 (docs/hardware_findings.md run 2,
+        Q21): in SERIES the voltage written to CH2 is the combined voltage (read back unchanged
+        from CH2, CH3 follows with half), in PARALLEL the current written to CH2 is the combined
+        current. Nothing else was written in a coupled mode: a write to CH3, the current of CH2
+        in SERIES and the voltage of CH2 in PARALLEL are untested, so they stay refused (a wrong
+        guess would be applied to the terminals before the read-back could object).
         """
-        # ASSUMPTION(hw): write side of question 21 (what a setpoint written to CH2 or CH3 means
-        # in SERIES or PARALLEL is unknown).
+        if ch not in (2, 3) or mode is TrackMode.INDEPENDENT:
+            return None
+        if ch == 2 and (
+            (mode is TrackMode.SERIES and quantity == 'voltage')
+            or (mode is TrackMode.PARALLEL and quantity == 'current')
+        ):
+            return None
+        return (
+            f'refusing to write the {quantity} setpoint of CH{ch} while the track mode is '
+            f'{mode.value}: only the CH2 voltage in SERIES and the CH2 current in PARALLEL '
+            'have been verified on hardware (open question 21)'
+        )
+
+    def _require_coupled_write_allowed(self, ch: int, quantity: str) -> None:
+        """Raise RuntimeError before anything is sent if the coupled-mode write is unverified."""
         if ch not in (2, 3):
             return
         mode = self._track if self._track is not None else self.track()
-        if mode is not TrackMode.INDEPENDENT:
-            raise RuntimeError(
-                f'refusing to write {what} on CH{ch} while the track mode is {mode.value}: '
-                'the write side of open question 21 (series/parallel setpoint meaning) is '
-                'untested on hardware'
-            )
+        reason = self._coupled_write_refusal(ch, quantity, mode)
+        if reason is not None:
+            raise RuntimeError(reason)
 
     # ---- output -------------------------------------------------------------------------
 
@@ -704,7 +725,7 @@ class SiglentSpdPlug(BasePlug):  # type: ignore[misc]
         n = _channel(ch)
         value = _nonnegative('volts', volts)
         self._guard_voltage(n, value)
-        self._require_independent(n, 'a voltage setpoint')
+        self._require_coupled_write_allowed(n, 'voltage')
         self.write_verified(_Scpi.voltage(n, self._fmt(value)), _Scpi.voltage_query(n), value)
 
     def voltage_setpoint(self, ch: int | Channel) -> float:
@@ -723,7 +744,7 @@ class SiglentSpdPlug(BasePlug):  # type: ignore[misc]
         n = _channel(ch)
         value = _nonnegative('amps', amps)
         self._guard_current(n, value)
-        self._require_independent(n, 'a current setpoint')
+        self._require_coupled_write_allowed(n, 'current')
         self.write_verified(_Scpi.current(n, self._fmt(value)), _Scpi.current_query(n), value)
 
     def current_setpoint(self, ch: int | Channel) -> float:
@@ -806,12 +827,16 @@ class SiglentSpdPlug(BasePlug):  # type: ignore[misc]
 
         Every item is attempted; one RuntimeError lists all failures. A non-boolean
         ``ocp_enabled`` raises ValueError before anything is sent. On CH2 or CH3 while the track
-        mode is SERIES or PARALLEL it raises RuntimeError (open question 21) before anything
-        is sent.
+        mode is SERIES or PARALLEL a ``voltage`` or ``current`` item that is not one of the
+        two verified coupled writes (CH2 voltage in SERIES, CH2 current in PARALLEL) raises
+        RuntimeError (open question 21) before anything is sent.
         """
         n = _channel(ch)
         enabled = None if ocp_enabled is None else _boolean('ocp_enabled', ocp_enabled)
-        self._require_independent(n, 'channel settings')
+        if voltage is not None:
+            self._require_coupled_write_allowed(n, 'voltage')
+        if current is not None:
+            self._require_coupled_write_allowed(n, 'current')
         steps: list[tuple[str, Any, Callable[[Any], None]]] = [
             ('ovp', ovp, lambda x: self.set_ovp(n, x)),
             ('ocp', ocp, lambda x: self.set_ocp(n, x)),
@@ -1049,6 +1074,12 @@ class SiglentSpdPlug(BasePlug):  # type: ignore[misc]
         The unlock must be the **last write** of the session: the instrument sets LOCK to 1 on
         every remote write (queries do not), so any write after ``set_lock(False)`` would lock
         the front panel again. Nothing may be added after the unlock step except the close.
+
+        A non-zero OFF delay is zeroed first (``_zero_pending_off_delays``): verified on
+        SPD4323X, firmware 4.1.2.9R1, 2026-10-04 (docs/hardware_findings.md run 2, Q22) that
+        ``OUTPut:ALL 0`` honours the delay (``OUTPut?`` answers 1 and the output stays live
+        until it elapsed), and that writing the delay 0 while the switch-off is pending
+        switches the output off at once.
         """
         skip_restore: str | None = None
         if self._outputs_off_on_teardown:
@@ -1068,8 +1099,8 @@ class SiglentSpdPlug(BasePlug):  # type: ignore[misc]
         # Any remote write sets LOCK to 1, so this must stay the last write of the session
         # (verified at the SCPI level on SPD4323X, firmware 4.1.2.9R1, 2026-10-05,
         # docs/hardware_findings.md Q12: LOCK 0 clears it and does not re-lock).
-        # ASSUMPTION(hw): the front panel is visibly unlocked afterwards (lock icon, keys
-        # usable); only LOCK? = 0 has been observed.
+        # verified on SPD4323X, firmware 4.1.2.9R1, 2026-10-04 (docs/hardware_findings.md run 2,
+        # Q12): after this step LOCK? answers 0 and the owner saw the front panel unlocked.
         self._teardown_step('unlock front panel', lambda: self.set_lock(False))
         self._close()
 

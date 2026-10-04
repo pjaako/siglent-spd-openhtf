@@ -10,8 +10,9 @@ def test_models_are_the_three_documented_ones() -> None:
         assert len(model.channels) == 4
 
 
-def test_no_model_counts_as_tested_until_hardware_acceptance() -> None:
-    assert [name for name, m in MODELS.items() if m.tested] == []
+def test_only_the_spd4323x_counts_as_tested() -> None:
+    # experiments 21 and 30 passed on an SPD4323X (docs/hardware_findings.md run 2)
+    assert [name for name, m in MODELS.items() if m.tested] == ['SPD4323X']
 
 
 def test_spd4323x_ratings() -> None:

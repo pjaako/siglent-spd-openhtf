@@ -614,22 +614,94 @@ def test_guard_follows_a_return_to_independent_mode() -> None:
 # ---- coupled modes (open question 21) --------------------------------------------------------
 
 
-@pytest.mark.parametrize('mode', [TrackMode.SERIES, TrackMode.PARALLEL])
-@pytest.mark.parametrize('ch', [2, 3])
-def test_setpoints_of_ch2_and_ch3_are_refused_in_a_coupled_mode(mode: TrackMode, ch: int) -> None:
+# (mode, channel, quantity) combinations that were never written on hardware
+_UNTESTED_COUPLED_WRITES = [
+    (TrackMode.SERIES, 2, 'current'),
+    (TrackMode.SERIES, 3, 'voltage'),
+    (TrackMode.SERIES, 3, 'current'),
+    (TrackMode.PARALLEL, 2, 'voltage'),
+    (TrackMode.PARALLEL, 3, 'voltage'),
+    (TrackMode.PARALLEL, 3, 'current'),
+]
+
+
+@pytest.mark.parametrize(('mode', 'ch', 'quantity'), _UNTESTED_COUPLED_WRITES)
+def test_unverified_coupled_writes_are_refused_before_anything_is_sent(
+    mode: TrackMode, ch: int, quantity: str
+) -> None:
     plug, fake = _plug()
     plug.set_track(mode)
     start = len(fake.log)
-    for call in (
-        lambda: plug.set_voltage(ch, 5),
-        lambda: plug.set_current(ch, 1),
-        lambda: plug.configure_channel(ch, voltage=5),
-        lambda: plug.configure_channel(ch, ovp=10, ocp_enabled=True),
-    ):
-        with pytest.raises(RuntimeError, match='question 21'):
-            call()
+    setter = plug.set_voltage if quantity == 'voltage' else plug.set_current
+    with pytest.raises(RuntimeError, match='question 21'):
+        setter(ch, 1)
+    with pytest.raises(RuntimeError, match='question 21'):
+        plug.configure_channel(ch, ovp=10, **{quantity: 1})  # even with a harmless item first
     assert not [c for c in _new(fake, start) if '?' not in c]  # nothing was sent
     assert fake.channels[2].voltage == 0
+    assert fake.channels[3].current == 0
+
+
+def test_ch2_voltage_in_series_is_the_combined_value() -> None:
+    # verified on SPD4323X, firmware 4.1.2.9R1, 2026-10-04 (docs/hardware_findings.md run 2, Q21)
+    plug, fake = _plug()
+    plug.set_track(TrackMode.SERIES)
+    start = len(fake.log)
+    plug.set_voltage(2, 20)
+    assert _new(fake, start) == [':SOURce:VOLTage:SET CH2,20', ':SOURce:VOLTage:SET? CH2']
+    assert plug.voltage_setpoint(2) == 20
+    assert plug.voltage_setpoint(3) == 10  # CH3 follows with half
+    plug.configure_channel(2, voltage=5, ovp=30)
+    assert (plug.voltage_setpoint(2), plug.ovp(2)) == (5, 30)
+
+
+def test_ch2_current_in_parallel_is_the_combined_value() -> None:
+    # verified on SPD4323X, firmware 4.1.2.9R1, 2026-10-04 (docs/hardware_findings.md run 2, Q21)
+    plug, fake = _plug()
+    plug.set_track(TrackMode.PARALLEL)
+    plug.set_current(2, 5)
+    assert plug.current_setpoint(2) == 5
+    assert plug.current_setpoint(3) == 2.5
+    assert fake.channels[2].current == 2.5
+
+
+def test_a_coupled_write_that_the_instrument_treats_as_per_half_is_caught_by_read_back() -> None:
+    class PerHalf(FakeSpdResource):
+        def write(self, message: str) -> None:  # the interpretation the hardware refuted
+            if message.startswith(':SOURce:VOLTage:SET CH2,'):
+                message = f':SOURce:VOLTage:SET CH2,{float(message.split(",")[1]) / 2:g}'
+            super().write(message)
+
+    plug, _ = _plug(fake=PerHalf())
+    plug.set_track(TrackMode.SERIES)
+    with pytest.raises(RuntimeError, match='VOLTage'):
+        plug.set_voltage(2, 20)
+
+
+def test_the_guard_of_the_combined_ch2_write_is_the_series_or_parallel_rating() -> None:
+    plug, fake = _plug()
+    plug.set_track(TrackMode.SERIES)
+    plug.set_voltage(2, 40)  # above the 32 V channel rating, below the 60 V series rating
+    assert plug.voltage_setpoint(2) == 40
+    start = len(fake.log)
+    with pytest.raises(ValueError, match='60 V rating'):
+        plug.set_voltage(2, 61)
+    plug.set_track(TrackMode.PARALLEL)
+    with pytest.raises(ValueError, match='6.4 A rating'):
+        plug.set_current(2, 6.5)
+    assert not [
+        c for c in _new(fake, start) if '?' not in c and 'TRACK' not in c
+    ]  # nothing was sent for the refused values
+
+
+def test_the_guard_of_everything_else_stays_at_the_channel_rating_in_a_coupled_mode() -> None:
+    plug, _ = _plug()
+    plug.set_track(TrackMode.PARALLEL)
+    with pytest.raises(ValueError, match='32 V rating'):
+        plug.set_voltage(2, 33)  # refused anyway, but the guard speaks first
+    plug.set_track(TrackMode.SERIES)
+    with pytest.raises(ValueError, match='3.2 A rating'):
+        plug.set_current(3, 3.3)
 
 
 @pytest.mark.parametrize('mode', [TrackMode.SERIES, TrackMode.PARALLEL])
@@ -650,7 +722,7 @@ def test_the_refusal_applies_with_an_unknown_model_too() -> None:
     plug, _ = _plug(fake=fake)
     plug.set_track(TrackMode.SERIES)
     with pytest.raises(RuntimeError, match='question 21'):
-        plug.set_voltage(2, 5)
+        plug.set_voltage(3, 5)
 
 
 def test_the_refusal_uses_a_track_mode_read_from_the_instrument() -> None:
@@ -666,7 +738,7 @@ def test_the_guard_is_checked_before_the_coupled_mode_refusal() -> None:
     plug, _ = _plug()
     plug.set_track(TrackMode.SERIES)
     with pytest.raises(ValueError, match='rating'):
-        plug.set_voltage(2, 33)
+        plug.set_voltage(2, 61)
 
 
 # ---- protection -----------------------------------------------------------------------------
@@ -1191,30 +1263,42 @@ def test_restore_of_a_value_between_rating_and_instrument_maximum_is_reported() 
 
 
 @pytest.mark.parametrize('mode', [TrackMode.SERIES, TrackMode.PARALLEL])
-def test_restore_skips_ch2_and_ch3_setpoints_in_a_coupled_mode_and_reports_them(
+def test_restore_in_a_coupled_mode_writes_only_the_verified_ch2_quantity(
     mode: TrackMode,
 ) -> None:
     plug, fake = _plug()
     plug.set_track(mode)
     snap = plug.snapshot()
     snap['channels'][1]['voltage'] = 2.0
+    series = mode is TrackMode.SERIES
     snap['channels'][2]['voltage'] = 7.0
+    snap['channels'][2]['current'] = 1.0
     snap['channels'][3]['current'] = 1.0
     snap['channels'][3]['ovp'] = 20.0
     start = len(fake.log)
     with pytest.raises(RuntimeError) as err:
         plug.restore(snap)
     message = str(err.value)
-    assert 'CH2 voltage/current' in message
-    assert 'CH3 voltage/current' in message
+    skipped_ch2 = 'CH2 current' if series else 'CH2 voltage'
+    restored_ch2 = 'CH2 voltage' if series else 'CH2 current'
+    assert skipped_ch2 in message
+    assert restored_ch2 not in message
+    assert 'CH3 voltage' in message
+    assert 'CH3 current' in message
     assert 'question 21' in message
     writes = [c for c in _new(fake, start) if '?' not in c]
     assert ':SOURce:VOLTage:SET CH1,2' in writes  # CH1 is restored
     assert ':SOURce:OVP CH3,20' in writes  # so are the protection values of CH3
+    wanted = ':SOURce:VOLTage:SET CH2,7' if series else ':SOURce:CURRent:SET CH2,1'
+    assert wanted in writes  # the verified combined quantity of CH2
     assert not [
-        c for c in writes if c.startswith((':SOURce:VOLTage:SET CH2', ':SOURce:CURRent:SET CH3'))
+        c
+        for c in writes
+        if c.startswith((':SOURce:VOLTage:SET CH3', ':SOURce:CURRent:SET CH3'))
+        or c.startswith(':SOURce:CURRent:SET CH2' if series else ':SOURce:VOLTage:SET CH2')
     ]
-    assert fake.channels[2].voltage == 0
+    assert fake.channels[2].voltage == (3.5 if series else 0)
+    assert fake.channels[2].current == (0 if series else 0.5)
 
 
 def test_restore_never_turns_an_output_on() -> None:

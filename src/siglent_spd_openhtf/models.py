@@ -20,10 +20,10 @@ class Model(NamedTuple):
     series: ChannelRating  # CH2 + CH3 in series
     parallel: ChannelRating  # CH2 + CH3 in parallel
     total_power_w: float
-    # True once hardware acceptance (docs/acceptance.md) has been run on that model. It stays
-    # False for every model, the SPD4323X included, until experiment 30 (output on) and the plug
-    # write smoke have run: the first acceptance run (2026-10-05) covered the raw socket with
-    # all outputs off only (docs/hardware_findings.md).
+    # True once hardware acceptance (docs/acceptance.md) has been run on that model: experiment
+    # 21 (the plug's write path and tearDown()) and experiment 30 (output on) both passed on the
+    # SPD4323X, firmware 4.1.2.9R1, over the LAN raw socket (docs/hardware_findings.md run 2,
+    # 2026-10-04). False for the two models nobody has had access to.
     tested: bool
 
 
@@ -51,7 +51,7 @@ MODELS: dict[str, Model] = {
         series=ChannelRating(60, 3.2),
         parallel=ChannelRating(32, 6.4),
         total_power_w=240,
-        tested=False,
+        tested=True,
     ),
     'SPD4121X': Model(
         name='SPD4121X',
