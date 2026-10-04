@@ -3,7 +3,7 @@ import sys
 
 import pytest
 
-from siglent_spd_openhtf.fake_resource import FakeSpdResource, FakeTimeout
+from siglent_spd_openhtf.fake_resource import FakeSpdResource, FakeTimeout, to_float32
 
 
 def test_idn_and_opc() -> None:
@@ -17,13 +17,13 @@ def test_unknown_model_is_rejected() -> None:
         FakeSpdResource(model='SPD9999X')
 
 
-def test_defaults_follow_the_manual() -> None:
+def test_defaults_follow_the_hardware() -> None:
     fake = FakeSpdResource()
     assert fake.query('VOLTage? CH1') == '0.000000'
     assert fake.query('CURRent? CH2') == '0.000000'
-    assert fake.query('OVP? CH1') == '6.000000'
-    assert fake.query('OVP? CH2') == '32.000000'
-    assert fake.query('OCP? CH4') == '3.200000'
+    assert fake.query('OVP? CH1') == '6.600000'
+    assert fake.query('OVP? CH2') == '35.200001'
+    assert fake.query('OCP? CH4') == '3.520000'
     assert fake.query('OCP:STATe? CH1') == '0'
     assert fake.query('OCP:DELay? CH1') == '0.000000'
     assert fake.query('OUTPut? CH3') == '0'
@@ -32,6 +32,7 @@ def test_defaults_follow_the_manual() -> None:
     assert fake.query('OUTPut:TRACK?') == '0'
     assert fake.query('MODE? CH2') == '0'
     assert fake.query('LOCK?') == '0'
+    assert fake.query('*ESR?') == '0'
     assert fake.query('OVP:PROTect:STATe? CH1') == '0'
     assert fake.query('OCP:PROTect:STATe? CH1') == '0'
 
@@ -147,8 +148,25 @@ def test_unknown_header_is_ignored_on_write_and_times_out_on_query() -> None:
     assert fake.log == ['FROBnicate CH1,1', 'FROBnicate? CH1']
 
 
-@pytest.mark.parametrize('query', ['VOLTage? CH5', 'VOLTage?', 'VOLTage? CH0', 'MEASure:VOLTage?'])
-def test_invalid_or_missing_channel_times_out(query: str) -> None:
+@pytest.mark.parametrize(
+    'query', ['VOLTage? CH5', 'VOLTage? CH0', 'VOLTage? 1', 'VOLTage? (CH1)', 'MEASure:VOLTage? 2']
+)
+def test_invalid_channel_times_out(query: str) -> None:
+    with pytest.raises(FakeTimeout):
+        FakeSpdResource().query(query)
+
+
+def test_voltage_query_without_a_channel_answers_ch1() -> None:
+    # ASSUMPTION(hw): CH1 or the panel-selected channel (docs/hardware_findings.md Q8).
+    fake = FakeSpdResource()
+    fake.write('VOLTage CH1,5')
+    fake.write('VOLTage CH2,14')
+    assert fake.query('VOLTage?') == '5.000000'
+    assert fake.query('VOLTage?CH2') == '14.000000'  # the space before the channel is optional
+
+
+@pytest.mark.parametrize('query', ['OUTPut:TRACK? CH1', 'LOCK? CH1', 'OUTPut:ALL? CH1'])
+def test_a_query_without_a_channel_gets_no_answer_when_given_one(query: str) -> None:
     with pytest.raises(FakeTimeout):
         FakeSpdResource().query(query)
 
@@ -168,53 +186,200 @@ def test_a_set_command_used_as_query_times_out() -> None:
 @pytest.mark.parametrize(
     ('command', 'query', 'answer'),
     [
-        ('VOLTage CH1,99', 'VOLTage? CH1', '6.000000'),
-        ('VOLTage CH2,99', 'VOLTage? CH2', '32.000000'),
-        ('CURRent CH1,99', 'CURRent? CH1', '3.200000'),
+        ('VOLTage CH1,7.5', 'VOLTage? CH1', '6.060000'),
+        ('VOLTage CH1,6', 'VOLTage? CH1', '6.000000'),
+        ('VOLTage CH2,99', 'VOLTage? CH2', '32.320000'),
+        ('CURRent CH1,4', 'CURRent? CH1', '3.232000'),
+        ('CURRent CH1,3.2', 'CURRent? CH1', '3.200000'),
+        ('OVP CH1,7.2', 'OVP? CH1', '6.600000'),
         ('OVP CH4,99', 'OVP? CH4', '6.600000'),
+        ('OVP CH1,0.3', 'OVP? CH1', '0.600000'),
         ('OVP CH1,0', 'OVP? CH1', '0.600000'),
+        ('OCP CH1,3.84', 'OCP? CH1', '3.520000'),
+        ('OCP CH1,0.16', 'OCP? CH1', '0.320000'),
         ('OCP CH1,0', 'OCP? CH1', '0.320000'),
         ('OCP CH3,99', 'OCP? CH3', '3.520000'),
         ('VOLTage CH1,-1', 'VOLTage? CH1', '0.000000'),
         ('CURRent CH1,-1', 'CURRent? CH1', '0.000000'),
+        ('OCP:DELay CH1,3601', 'OCP:DELay? CH1', '3600.000000'),
+        ('OCP:DELay CH1,-1', 'OCP:DELay? CH1', '0.000000'),
+        # ASSUMPTION(hw): same as OCP:DELay (the ON/OFF delay writes were not exercised)
+        ('OUTPut:ON:DELay CH1,4000', 'OUTPut:ON:DELay? CH1', '3600.000000'),
+        ('OUTPut:OFF:DELay CH1,-5', 'OUTPut:OFF:DELay? CH1', '0.000000'),
     ],
 )
 def test_out_of_range_values_are_clamped_silently(command: str, query: str, answer: str) -> None:
     fake = FakeSpdResource()
     fake.write(command)
     assert fake.query(query) == answer
+    assert fake.query('*ESR?') == '0'  # nothing is ever reported
 
 
-def test_clamping_honours_track_mode() -> None:
-    fake = FakeSpdResource()
-    fake.write('OUTPut:TRACK SERIES')
+def test_clamping_follows_the_rating_of_each_model() -> None:
+    fake = FakeSpdResource(model='SPD4121X')
     fake.write('VOLTage CH2,99')
     fake.write('CURRent CH2,99')
-    assert fake.query('VOLTage? CH2') == '60.000000'
-    assert fake.query('CURRent? CH2') == '3.200000'
+    fake.write('OVP CH1,99')
+    assert fake.query('VOLTage? CH2') == '12.120000'
+    assert fake.query('CURRent? CH2') == '10.100000'
+    assert fake.query('OVP? CH1') == '16.500000'
+
+
+@pytest.mark.parametrize(
+    ('keyword', 'volt', 'curr', 'ovp', 'ocp', 'delay'),
+    [
+        ('MINimum', '0.000000', '0.000000', '0.600000', '0.320000', '0.000000'),
+        ('MIN', '0.000000', '0.000000', '0.600000', '0.320000', '0.000000'),
+        ('MAXimum', '6.060000', '3.232000', '6.600000', '3.520000', '3600.000000'),
+        ('max', '6.060000', '3.232000', '6.600000', '3.520000', '3600.000000'),
+        ('DEFault', '0.000000', '0.000000', '6.600000', '3.520000', '0.000000'),
+        ('DEF', '0.000000', '0.000000', '6.600000', '3.520000', '0.000000'),
+    ],
+)
+def test_keywords_in_set_commands(
+    keyword: str, volt: str, curr: str, ovp: str, ocp: str, delay: str
+) -> None:
+    fake = FakeSpdResource()
+    for command in ('VOLTage CH1,3', 'CURRent CH1,2', 'OVP CH1,3', 'OCP CH1,1', 'OCP:DELay CH1,5'):
+        fake.write(command)
+    fake.write(f'VOLTage CH1,{keyword}')
+    fake.write(f'CURRent CH1,{keyword}')
+    fake.write(f'OVP CH1,{keyword}')
+    fake.write(f'OCP CH1,{keyword}')
+    fake.write(f'OCP:DELay CH1,{keyword}')
+    assert fake.query('VOLTage? CH1') == volt
+    assert fake.query('CURRent? CH1') == curr
+    assert fake.query('OVP? CH1') == ovp
+    assert fake.query('OCP? CH1') == ocp
+    assert fake.query('OCP:DELay? CH1') == delay
+
+
+@pytest.mark.parametrize(
+    ('query', 'answer'),
+    [
+        ('VOLTage? CH1,MAX', '6.060000'),
+        ('VOLTage? CH1,MAXimum', '6.060000'),
+        ('VOLTage? CH1, MAX', '6.060000'),
+        (':SOURce:VOLTage:SET? CH2,MAXimum', '32.320000'),
+        ('VOLTage? CH1,MIN', '0.000000'),
+        ('VOLTage? CH1,DEFault', '0.000000'),
+        ('CURRent? CH4,MAX', '3.232000'),
+        ('CURRent? CH1,MIN', '0.000000'),
+        ('CURRent? CH1,DEF', '0.000000'),
+    ],
+)
+def test_keywords_as_query_arguments_for_voltage_and_current(query: str, answer: str) -> None:
+    assert FakeSpdResource().query(query) == answer
+
+
+@pytest.mark.parametrize(
+    'query',
+    [
+        'OVP? CH1,MAX',
+        'OCP? CH1,MAX',
+        'OCP? CH2,MIN',
+        'OCP:DELay? CH1,MAX',
+        'OUTPut:ON:DELay? CH1,MAX',
+        'OUTPut:OFF:DELay? CH1,DEF',
+        'VOLTage? CH1,7',
+    ],
+)
+def test_other_keyword_queries_get_no_answer(query: str) -> None:
+    with pytest.raises(FakeTimeout):
+        FakeSpdResource().query(query)
+
+
+def test_max_is_per_channel_and_ignores_the_track_mode() -> None:
+    fake = FakeSpdResource()
+    for word in ('SERIES', 'PARALLEL', 'INDEPENDENT'):
+        fake.write(f'OUTPut:TRACK {word}')
+        assert fake.query('VOLTage? CH2,MAX') == '32.320000'
+        assert fake.query('CURRent? CH2,MAX') == '3.232000'
+
+
+def test_values_are_stored_as_float32() -> None:
+    fake = FakeSpdResource()
+    assert to_float32(35.2) != 35.2
+    assert fake.query('OVP? CH2') == '35.200001'
+    assert fake.query('OVP? CH3') == '35.200001'
+    fake.write('VOLTage CH1,1.2345')
+    assert fake.query('VOLTage? CH1') == '1.234500'
+    assert fake.channels[1].voltage == to_float32(1.2345)
+    fake.write('OVP CH1,6.6')
+    assert fake.query('OVP? CH1') == '6.600000'
+
+
+def test_non_numeric_values_and_invalid_channels_change_nothing() -> None:
+    fake = FakeSpdResource()
+    fake.write('VOLTage CH1,abc')
+    fake.write('VOLTage CH1,nan')
+    fake.write('CURRent CH1')
+    assert fake.query('VOLTage? CH1') == '0.000000'
+    assert fake.query('*ESR?') == '0'
+    assert fake.lock == 0
+
+
+def test_coupled_modes_report_the_combined_value_on_ch2() -> None:
+    fake = FakeSpdResource()
+    fake.write('VOLTage CH2,14')
+    fake.write('CURRent CH2,3')
+    fake.write('OUTPut:TRACK SERIES')
+    assert fake.query('VOLTage? CH2') == '28.000000'  # verified: 2 x 14 V
+    assert fake.query('CURRent? CH2') == '3.000000'
+    assert fake.query('VOLTage? CH3') == '14.000000'
     fake.write('OUTPut:TRACK PARALLEL')
-    fake.write('VOLTage CH2,99')
-    fake.write('CURRent CH2,99')
-    assert fake.query('VOLTage? CH2') == '32.000000'
-    assert fake.query('CURRent? CH2') == '6.400000'
-    fake.write('VOLTage CH1,99')  # CH1 never follows the track mode
-    assert fake.query('VOLTage? CH1') == '6.000000'
+    assert fake.query('VOLTage? CH2') == '14.000000'
+    assert fake.query('CURRent? CH2') == '6.000000'  # verified: 2 x 3 A
+    assert fake.query('CURRent? CH3') == '3.000000'
+    fake.write('OUTPut:TRACK INDEPENDENT')
+    assert fake.query('VOLTage? CH2') == '14.000000'
+    assert fake.query('CURRent? CH2') == '3.000000'
 
 
-def test_ovp_and_ocp_clamp_to_the_panel_range_of_the_track_aware_rating() -> None:
+def test_writing_ch2_in_a_coupled_mode_stores_half_the_value() -> None:
+    # ASSUMPTION(hw): write side of question 21 (the combined value is written).
     fake = FakeSpdResource()
     fake.write('OUTPut:TRACK SERIES')
-    fake.write('OVP CH2,99')
-    fake.write('OCP CH2,99')
-    assert fake.query('OVP? CH2') == '66.000000'
+    fake.write('VOLTage CH2,20')
+    assert fake.query('VOLTage? CH2') == '20.000000'
+    assert fake.channels[2].voltage == 10.0
+    fake.write('CURRent CH2,2')  # the current is not combined in SERIES
+    assert fake.channels[2].current == 2.0
+    fake.write('OUTPut:TRACK PARALLEL')
+    fake.write('CURRent CH2,5')
+    assert fake.query('CURRent? CH2') == '5.000000'
+    assert fake.channels[2].current == 2.5
+
+
+def test_entering_a_coupled_mode_copies_ch2_setpoints_to_ch3_for_good() -> None:
+    fake = FakeSpdResource()
+    for command in ('VOLTage CH2,14', 'CURRent CH2,3', 'VOLTage CH3,12', 'CURRent CH3,2'):
+        fake.write(command)
+    fake.write('OVP CH3,20')
+    fake.write('OUTPut:TRACK SERIES')
+    assert (fake.query('VOLTage? CH3'), fake.query('CURRent? CH3')) == ('14.000000', '3.000000')
+    fake.write('OUTPut:TRACK PARALLEL')
+    fake.write('OUTPut:TRACK INDEPENDENT')
+    assert (fake.query('VOLTage? CH3'), fake.query('CURRent? CH3')) == ('14.000000', '3.000000')
+    assert fake.query('OVP? CH3') == '20.000000'  # OVP and OCP are not changed
+    assert fake.query('OVP? CH2') == '35.200001'
     assert fake.query('OCP? CH2') == '3.520000'
+
+
+def test_going_independent_does_not_copy() -> None:
+    fake = FakeSpdResource()
+    fake.write('VOLTage CH2,14')
+    fake.write('VOLTage CH3,12')
+    fake.write('OUTPut:TRACK INDEPENDENT')
+    assert fake.query('VOLTage? CH3') == '12.000000'
+
+
+def test_ovp_and_ocp_are_not_changed_by_the_track_mode() -> None:
+    fake = FakeSpdResource()
+    fake.write('OUTPut:TRACK SERIES')
+    assert fake.query('OVP? CH2') == '35.200001'
     fake.write('OUTPut:TRACK PARALLEL')
-    fake.write('OVP CH2,99')
-    fake.write('OCP CH2,99')
-    fake.write('OVP CH3,0')
-    assert fake.query('OVP? CH2') == '35.200000'
-    assert fake.query('OCP? CH2') == '7.040000'
-    assert fake.query('OVP? CH3') == '3.200000'
+    assert fake.query('OCP? CH2') == '3.520000'
 
 
 def test_reject_ignores_matching_writes_only() -> None:
@@ -377,8 +542,11 @@ def test_sense_on_ch2_and_ch3_only() -> None:
     fake.write('MODE CH2,2W')
     assert fake.query('MODE? CH2') == '0'
     fake.write('MODE CH1,4W')
+    fake.write('MODE CH4,4W')
+    assert fake.query('MODE? CH1') == '0'  # verified: the supply answers 0 for CH1
+    assert fake.sense == {2: 0, 3: 1}  # ASSUMPTION(hw): CH1/CH4 writes are ignored (not tried)
     with pytest.raises(FakeTimeout):
-        fake.query('MODE? CH1')
+        fake.query('MODE? CH4')  # ASSUMPTION(hw): not tried
 
 
 def test_lock_and_delays() -> None:
@@ -391,6 +559,87 @@ def test_lock_and_delays() -> None:
     fake.write('OUTPut:OFF:DELay CH1,1.5')
     assert fake.query('OUTPut:ON:DELay? CH1') == '3.000000'
     assert fake.query('OUTPut:OFF:DELay? CH1') == '1.500000'
+
+
+def test_every_accepted_write_locks_and_queries_never_do() -> None:
+    fake = FakeSpdResource()
+    for query in ('VOLTage? CH1', 'OUTPut:TRACK?', '*IDN?', 'MEASure:VOLTage? CH1', '*ESR?'):
+        fake.query(query)
+    assert fake.query('LOCK?') == '0'
+    fake.write('VOLTage CH1,1')
+    assert fake.lock == 1
+    assert fake.query('LOCK?') == '1'
+    fake.write('LOCK 0')
+    assert fake.query('LOCK?') == '0'  # the LOCK write itself does not re-lock
+    fake.write('OUTPut CH1,0')
+    assert fake.lock == 1
+    fake.write(':SOURce:LOCK:STATe OFF')
+    assert fake.lock == 0
+    fake.write('LOCK ON')
+    assert fake.lock == 1
+
+
+@pytest.mark.parametrize('command', ['VOLTage CH5,1', 'VOLTage CH1,abc', 'FOOBar CH1,1', 'LOCK 0'])
+def test_ignored_writes_do_not_lock(command: str) -> None:
+    fake = FakeSpdResource()
+    fake.write(command)
+    assert fake.lock == 0
+
+
+def test_a_rejected_write_does_not_lock() -> None:
+    fake = FakeSpdResource(reject={'VOLTage CH1': 'x'})
+    fake.write('VOLTage CH1,1')
+    assert fake.lock == 0
+
+
+def test_esr_is_set_by_unknown_headers_and_unanswered_queries_and_clears_on_read() -> None:
+    fake = FakeSpdResource()
+    assert fake.query('*ESR?') == '0'
+    fake.write('FOOBar CH1,1')
+    assert fake.query('*ESR?') == '32'
+    assert fake.query('*ESR?') == '0'  # reading clears
+    with pytest.raises(FakeTimeout):
+        fake.query('FOOBar? CH1')
+    assert fake.query('*ESR?') == '32'
+    with pytest.raises(FakeTimeout):
+        fake.query('VOLTage? CH5')  # an unanswered query counts too
+    fake.write('*CLS')
+    assert fake.query('*ESR?') == '0'
+    with pytest.raises(FakeTimeout):
+        fake.query('OVP? CH1,MAX')
+    fake.write('*CLS')
+    assert fake.query('*ESR?') == '0'
+
+
+def test_esr_ignores_invalid_channels_bad_values_and_clamping() -> None:
+    fake = FakeSpdResource()
+    fake.write('VOLTage CH5,1')
+    fake.write('VOLTage CH1,abc')
+    fake.write('VOLTage CH1,7.5')  # clamped
+    assert fake.query('*ESR?') == '0'
+
+
+def test_opc_sets_bit_0_and_the_other_status_queries_answer_zero() -> None:
+    fake = FakeSpdResource()
+    fake.write('*OPC')
+    assert fake.query('*ESR?') == '1'
+    assert [fake.query(q) for q in ('*STB?', '*ESE?', '*SRE?')] == ['0', '0', '0']
+    fake.write('*WAI')  # accepted, no visible effect
+    assert fake.query('*ESR?') == '0'
+    assert fake.query('*OPC?') == '1'
+
+
+def test_semicolon_chaining_concatenates_the_replies_without_a_separator() -> None:
+    fake = FakeSpdResource(serial='SN1', firmware='4.1.2.9R1')
+    assert fake.query('*IDN?;*OPC?') == 'Siglent Technologies,SPD4323X,SN1,4.1.2.9R11'
+    assert fake.query('VOLTage CH1,1.25;VOLTage? CH1') == '1.250000'
+    assert fake.query('VOLTage CH1,1.5;*OPC?') == '1'
+    assert fake.query('VOLTage? CH1;CURRent? CH1') == '1.5000000.000000'
+    fake.write('VOLTage CH2,2;CURRent CH2,0.5')
+    assert (fake.query('VOLTage? CH2'), fake.query('CURRent? CH2')) == ('2.000000', '0.500000')
+    assert fake.log[0] == '*IDN?;*OPC?'  # one log entry per line sent
+    with pytest.raises(FakeTimeout):
+        fake.query('VOLTage CH1,1;VOLTage CH1,2')  # no query in the line
 
 
 def test_set_load_validates_channel() -> None:

@@ -163,9 +163,9 @@ def _to_bool(text: str, what: str) -> bool:
 
 def _parse_track(text: str) -> TrackMode:
     word = text.strip().upper()
-    # ASSUMPTION(hw): track numbering. The manual only shows 0 = independent; 1 = series and
-    # 2 = parallel is inferred from the order {0|1|2|INDEPENDENT|SERIES|PARALLEL}. Words are
-    # accepted as well in case the instrument answers with one.
+    # verified on SPD4323X, firmware 4.1.2.9R1, 2026-10-05 (docs/hardware_findings.md Q13):
+    # the query answers the number, 0 = independent, 1 = series, 2 = parallel. Words are
+    # accepted as well in case another firmware answers with one.
     if word in _TRACK_BY_NUMBER:
         return _TRACK_BY_NUMBER[word]
     for mode in TrackMode:
@@ -176,8 +176,9 @@ def _parse_track(text: str) -> TrackMode:
 
 def _parse_sense(text: str) -> SenseMode:
     word = text.strip().upper()
-    # ASSUMPTION(hw): sense numbering. The manual does not map 0/1 to 2W/4W; 0 = 2W and
-    # 1 = 4W is assumed from the order {0|1|2W|4W}. Words are accepted as well.
+    # verified on SPD4323X, firmware 4.1.2.9R1, 2026-10-05 (docs/hardware_findings.md Q13):
+    # the query answers the number, 0 = 2W, 1 = 4W (written on CH2; CH3 not written). Words are
+    # accepted as well.
     if word in _SENSE_BY_NUMBER:
         return _SENSE_BY_NUMBER[word]
     for mode in SenseMode:
@@ -198,12 +199,13 @@ def _boolean(name: str, value: object) -> bool:
     raise ValueError(f'{name} must be a bool or the int 0 or 1, got {value!r}')
 
 
-# ASSUMPTION(hw): channel addressing / optional nodes. Every command is sent in the exact form
-# the manual prints in its example (leading colon, SOURce prefix and :SET node included),
-# because a command without [:SET] "will operate on the current channel" (manual 10.2) and the
-# manual does not say whether the channel argument is honoured then. Queries are derived from
-# the printed example of the paired set command. This class is the only place that builds
-# command strings.
+# Every command is sent in the exact form the manual prints in its example (leading colon,
+# SOURce prefix and :SET node included); queries are derived from the printed example of the
+# paired set command. This class is the only place that builds command strings.
+# verified on SPD4323X, firmware 4.1.2.9R1, 2026-10-05 (docs/hardware_findings.md Q7, Q20):
+# the verbatim forms and the short forms (optional SOURce, :SET, :STATe, long or short
+# keywords) both work, and the channel argument is always honoured; the verbatim forms are kept
+# to avoid churn.
 class _Scpi:
     IDN = '*IDN?'
     OPC = '*OPC?'
@@ -219,12 +221,22 @@ class _Scpi:
         return f':SOURce:VOLTage:SET? CH{n}'
 
     @staticmethod
+    def voltage_max_query(n: int) -> str:
+        # verified on SPD4323X, firmware 4.1.2.9R1, 2026-10-05 (docs/hardware_findings.md Q9,
+        # Q14): MAX is the instrument's limit, 1.01 x the rating, per channel.
+        return f':SOURce:VOLTage:SET? CH{n},MAXimum'
+
+    @staticmethod
     def current(n: int, value: str) -> str:
         return f':SOURce:CURRent:SET CH{n},{value}'
 
     @staticmethod
     def current_query(n: int) -> str:
         return f':SOURce:CURRent:SET? CH{n}'
+
+    @staticmethod
+    def current_max_query(n: int) -> str:
+        return f':SOURce:CURRent:SET? CH{n},MAXimum'
 
     @staticmethod
     def ovp(n: int, value: str) -> str:
@@ -244,8 +256,9 @@ class _Scpi:
 
     @staticmethod
     def ocp_state(n: int, on: bool) -> str:
-        # ASSUMPTION(hw): no space. The manual example is ':SOURce:OCP:STATe CH1, 1' (a space
-        # after the comma); every other example has none, so none is sent.
+        # verified on SPD4323X, firmware 4.1.2.9R1, 2026-10-05 (docs/hardware_findings.md Q7):
+        # the manual example is ':SOURce:OCP:STATe CH1, 1' (a space after the comma); with and
+        # without the space both work, every other example has none, so none is sent.
         return f':SOURce:OCP:STATe CH{n},{int(on)}'
 
     @staticmethod
@@ -365,8 +378,9 @@ class SiglentSpdPlug(BasePlug):  # type: ignore[misc]
         else:
             self.resource = resource
         try:
-            # ASSUMPTION(hw): terminator. The manual does not state which terminator commands
-            # need nor what responses end with; '\n' is assumed for both directions.
+            # verified on SPD4323X, firmware 4.1.2.9R1, 2026-10-05 (docs/hardware_findings.md
+            # Q1), raw socket only: commands may end in LF (CRLF also works) and every reply
+            # ends in a single LF. USB not verified.
             self.resource.timeout = 5000
             self.resource.read_termination = '\n'
             self.resource.write_termination = '\n'
@@ -535,12 +549,23 @@ class SiglentSpdPlug(BasePlug):  # type: ignore[misc]
             }
         return {'channels': channels, 'track': self.track()}
 
+    @staticmethod
+    def _unchanged(wanted: bool | float, actual: bool | float) -> bool:
+        """True if the value read from the instrument already equals the wanted one."""
+        if isinstance(wanted, bool):
+            return wanted == actual
+        return math.isclose(float(wanted), float(actual), rel_tol=1e-6, abs_tol=5e-4)
+
     def restore(self, snapshot: dict[str, Any]) -> None:
         """Write a snapshot back. Never turns an output on; raises one error for all problems.
 
-        The track mode is written first and only if it differs. A channel whose output is on
-        is skipped (changing setpoints under a running DUT is not a restore), and so are CH2
-        and CH3 if the track restore failed. Every skipped channel is named in the error.
+        The track mode is written first and only if it differs. Every other value is read first
+        and written only if it differs (a write costs about 250 ms on the instrument). A channel
+        whose output is on is skipped (changing setpoints under a running DUT is not a restore),
+        and so are CH2 and CH3 if the track restore failed. While the track mode is SERIES or
+        PARALLEL the voltage and current setpoints of CH2 and CH3 are skipped as well (open
+        question 21: the write side is unknown). Every skipped channel or item is named in the
+        error.
         """
         failures: list[str] = []
         skipped: list[str] = []
@@ -555,14 +580,17 @@ class SiglentSpdPlug(BasePlug):  # type: ignore[misc]
 
         wanted: TrackMode = snapshot['track']
         track_ok = True
+        mode: TrackMode = wanted
         try:
             current = self.track()
         except Exception as exc:
             failures.append(f'track: {exc}')
             track_ok = False
         else:
+            mode = current
             if current != wanted:
                 track_ok = attempt('track', lambda: self.set_track(wanted))
+                mode = wanted
         for n, values in snapshot['channels'].items():
             # The 'output' entry is deliberately ignored: restore never enables an output.
             if n in (2, 3) and not track_ok:
@@ -577,44 +605,66 @@ class SiglentSpdPlug(BasePlug):  # type: ignore[misc]
             if is_on:
                 skipped.append(f'CH{n} (output is on)')
                 continue
-            setters: list[tuple[str, Callable[[int, Any], None], Any]] = [
-                ('OVP', self.set_ovp, values['ovp']),
-                ('OCP', self.set_ocp, values['ocp']),
-                ('OCP delay', self.set_ocp_delay, values['ocp_delay']),
-                ('OCP state', self.set_ocp_enabled, values['ocp_enabled']),
-                ('ON delay', lambda ch, v: self.set_output_delay(ch, on_s=v), values['on_delay']),
+            items: list[tuple[str, Callable[[int], Any], Callable[[int, Any], None], Any]] = [
+                ('OVP', self.ovp, self.set_ovp, values['ovp']),
+                ('OCP', self.ocp, self.set_ocp, values['ocp']),
+                ('OCP delay', self.ocp_delay, self.set_ocp_delay, values['ocp_delay']),
+                ('OCP state', self.ocp_enabled, self.set_ocp_enabled, values['ocp_enabled']),
+                (
+                    'ON delay',
+                    self._on_delay,
+                    lambda ch, v: self.set_output_delay(ch, on_s=v),
+                    values['on_delay'],
+                ),
                 (
                     'OFF delay',
+                    self._off_delay,
                     lambda ch, v: self.set_output_delay(ch, off_s=v),
                     values['off_delay'],
                 ),
-                ('voltage', self.set_voltage, values['voltage']),
-                ('current', self.set_current, values['current']),
             ]
-            for label, setter, value in setters:
-                attempt(f'CH{n} {label}', partial(setter, n, value))
+            if n in (2, 3) and mode is not TrackMode.INDEPENDENT:
+                # ASSUMPTION(hw): write side of question 21 (docs/scpi_reference.md section 8).
+                skipped.append(
+                    f'CH{n} voltage/current ({mode.value} mode: the write side of open '
+                    'question 21 is unknown)'
+                )
+            else:
+                items += [
+                    ('voltage', self.voltage_setpoint, self.set_voltage, values['voltage']),
+                    ('current', self.current_setpoint, self.set_current, values['current']),
+                ]
+            for label, getter, setter, value in items:
+                attempt(f'CH{n} {label}', partial(self._restore_item, n, getter, setter, value))
         if failures or skipped:
             parts = list(failures)
             if skipped:
-                parts.append('skipped channels: ' + ', '.join(skipped))
+                parts.append('skipped: ' + ', '.join(skipped))
             raise RuntimeError('restore failed: ' + '; '.join(parts))
+
+    def _restore_item(
+        self,
+        n: int,
+        getter: Callable[[int], Any],
+        setter: Callable[[int, Any], None],
+        value: Any,
+    ) -> None:
+        if not self._unchanged(value, getter(n)):
+            setter(n, value)
 
     # ---- limits -------------------------------------------------------------------------
 
     def _rating(self, ch: int) -> ChannelRating | None:
-        """Rated limit of a channel in the current coupling, None if the model is unknown."""
+        """Rated limit of a channel, None if the model is unknown.
+
+        The guard stays at the rated value. The instrument itself accepts up to 1.01 x the
+        rating (``VOLTage? CHn,MAX``, docs/hardware_findings.md Q9, Q14) and clamps silently
+        beyond; that 1 % is headroom, not a specification. The rating does not follow the
+        track mode: setpoints of CH2 and CH3 are refused in the coupled modes (see
+        ``_require_independent``).
+        """
         if self.model is None:
             return None
-        if ch in (1, 4):
-            return self.model.channels[ch - 1]
-        mode = self._track if self._track is not None else self.track()
-        # ASSUMPTION(hw): series/parallel setpoint is the combined value on CH2. In SERIES
-        # mode CH2 is assumed to accept up to the series voltage and in PARALLEL mode up to
-        # the parallel current (docs/scpi_reference.md section 8, question 21).
-        if mode is TrackMode.SERIES:
-            return self.model.series
-        if mode is TrackMode.PARALLEL:
-            return self.model.parallel
         return self.model.channels[ch - 1]
 
     def _guard_voltage(self, ch: int, volts: float) -> None:
@@ -627,27 +677,66 @@ class SiglentSpdPlug(BasePlug):  # type: ignore[misc]
         if rating is not None and amps > rating.current + _RATING_EPS:
             raise ValueError(f'{amps:g} A exceeds the {rating.current:g} A rating of CH{ch}')
 
+    def _require_independent(self, ch: int, what: str) -> None:
+        """Refuse to write ``what`` on CH2/CH3 while they are coupled (series or parallel).
+
+        In SERIES ``VOLTage? CH2`` answers the combined voltage (28 V with 14 V per half) but
+        nobody has written a setpoint in a coupled mode yet: a per-half write would double the
+        terminal voltage before the read-back could object, so nothing is sent. Lifted when the
+        extended experiment 15 has run (docs/hardware_findings.md Q21, docs/scpi_reference.md
+        section 8, question 21).
+        """
+        # ASSUMPTION(hw): write side of question 21 (what a setpoint written to CH2 or CH3 means
+        # in SERIES or PARALLEL is unknown).
+        if ch not in (2, 3):
+            return
+        mode = self._track if self._track is not None else self.track()
+        if mode is not TrackMode.INDEPENDENT:
+            raise RuntimeError(
+                f'refusing to write {what} on CH{ch} while the track mode is {mode.value}: '
+                'the write side of open question 21 (series/parallel setpoint meaning) is '
+                'untested on hardware'
+            )
+
     # ---- output -------------------------------------------------------------------------
 
     def set_voltage(self, ch: int | Channel, volts: float) -> None:
         n = _channel(ch)
         value = _nonnegative('volts', volts)
         self._guard_voltage(n, value)
+        self._require_independent(n, 'a voltage setpoint')
         self.write_verified(_Scpi.voltage(n, self._fmt(value)), _Scpi.voltage_query(n), value)
 
     def voltage_setpoint(self, ch: int | Channel) -> float:
         n = _channel(ch)
         return _to_float(self.query(_Scpi.voltage_query(n)), _Scpi.voltage_query(n))
 
+    def max_voltage(self, ch: int | Channel) -> float:
+        """The instrument's own voltage limit for the channel (1.01 x the rating on the SPD4323X).
+
+        Informational: the guard of ``set_voltage`` stays at the rated value.
+        """
+        n = _channel(ch)
+        return _to_float(self.query(_Scpi.voltage_max_query(n)), _Scpi.voltage_max_query(n))
+
     def set_current(self, ch: int | Channel, amps: float) -> None:
         n = _channel(ch)
         value = _nonnegative('amps', amps)
         self._guard_current(n, value)
+        self._require_independent(n, 'a current setpoint')
         self.write_verified(_Scpi.current(n, self._fmt(value)), _Scpi.current_query(n), value)
 
     def current_setpoint(self, ch: int | Channel) -> float:
         n = _channel(ch)
         return _to_float(self.query(_Scpi.current_query(n)), _Scpi.current_query(n))
+
+    def max_current(self, ch: int | Channel) -> float:
+        """The instrument's own current limit for the channel (1.01 x the rating on the SPD4323X).
+
+        Informational: the guard of ``set_current`` stays at the rated value.
+        """
+        n = _channel(ch)
+        return _to_float(self.query(_Scpi.current_max_query(n)), _Scpi.current_max_query(n))
 
     def set_output(self, ch: int | Channel, on: bool) -> None:
         n = _channel(ch)
@@ -716,10 +805,13 @@ class SiglentSpdPlug(BasePlug):  # type: ignore[misc]
         """Apply the given items in the order ovp, ocp, ocp_delay, ocp_enabled, voltage, current.
 
         Every item is attempted; one RuntimeError lists all failures. A non-boolean
-        ``ocp_enabled`` raises ValueError before anything is sent.
+        ``ocp_enabled`` raises ValueError before anything is sent. On CH2 or CH3 while the track
+        mode is SERIES or PARALLEL it raises RuntimeError (open question 21) before anything
+        is sent.
         """
         n = _channel(ch)
         enabled = None if ocp_enabled is None else _boolean('ocp_enabled', ocp_enabled)
+        self._require_independent(n, 'channel settings')
         steps: list[tuple[str, Any, Callable[[Any], None]]] = [
             ('ovp', ovp, lambda x: self.set_ovp(n, x)),
             ('ocp', ocp, lambda x: self.set_ocp(n, x)),
@@ -757,7 +849,8 @@ class SiglentSpdPlug(BasePlug):  # type: ignore[misc]
 
     def ocp(self, ch: int | Channel) -> float:
         n = _channel(ch)
-        # ASSUMPTION(hw): OCP? answers a plain number like OVP?; the manual prints no response.
+        # verified on SPD4323X, firmware 4.1.2.9R1, 2026-10-05 (docs/hardware_findings.md Q5):
+        # OCP? answers a plain number like OVP? (the manual prints no response).
         return _to_float(self.query(_Scpi.ocp_query(n)), _Scpi.ocp_query(n))
 
     def set_ocp_enabled(self, ch: int | Channel, on: bool) -> None:
@@ -846,16 +939,44 @@ class SiglentSpdPlug(BasePlug):  # type: ignore[misc]
 
     # ---- CH2/CH3 coupling and sense -----------------------------------------------------
 
+    def _ch3_setpoints(self) -> tuple[float, float] | None:
+        try:
+            return self.voltage_setpoint(3), self.current_setpoint(3)
+        except Exception as exc:
+            self.logger.warning('set_track: cannot read the CH3 setpoints: %s', exc)
+            return None
+
     def set_track(self, mode: TrackMode) -> None:
+        """Select independent, series or parallel mode of CH2/CH3.
+
+        Refused while the output of CH2 or CH3 is on. Entering SERIES or PARALLEL copies CH2's
+        voltage and current setpoints into CH3, and CH3 keeps them after returning to
+        INDEPENDENT (docs/hardware_findings.md Q13): a CH3 DUT switched on afterwards gets
+        CH2's voltage. CH3's setpoints are read before and after and a warning names both
+        values when they changed.
+        """
         wanted = TrackMode(mode)
         for n in (2, 3):
             if self.output(n):
                 raise RuntimeError(f'refusing to change the track mode while CH{n} output is on')
+        before = self._ch3_setpoints()
         self._track = None  # the cached value is untrusted until the read-back succeeds
         self.write_verified(
             _Scpi.track(wanted.value), _Scpi.TRACK_QUERY, wanted, parse=_parse_track
         )
         self._track = wanted
+        after = self._ch3_setpoints()
+        if before is not None and after is not None and before != after:
+            self.logger.warning(
+                'set_track(%s): the CH3 setpoints changed from %g V / %g A to %g V / %g A '
+                '(the instrument copies the CH2 setpoints into CH3 when entering series or '
+                'parallel mode and CH3 keeps them afterwards)',
+                wanted.value,
+                before[0],
+                before[1],
+                after[0],
+                after[1],
+            )
 
     def track(self) -> TrackMode:
         mode = _parse_track(self.query(_Scpi.TRACK_QUERY))
@@ -923,7 +1044,12 @@ class SiglentSpdPlug(BasePlug):  # type: ignore[misc]
                     self.logger.warning('teardown: CH%d output off failed: %s', n, channel_exc)
 
     def tearDown(self) -> None:
-        """Outputs off, optional restore, unlock, close. A failing step never stops the next."""
+        """Outputs off, optional restore, unlock, close. A failing step never stops the next.
+
+        The unlock must be the **last write** of the session: the instrument sets LOCK to 1 on
+        every remote write (queries do not), so any write after ``set_lock(False)`` would lock
+        the front panel again. Nothing may be added after the unlock step except the close.
+        """
         skip_restore: str | None = None
         if self._outputs_off_on_teardown:
             self._transport_error = None
@@ -939,8 +1065,11 @@ class SiglentSpdPlug(BasePlug):  # type: ignore[misc]
                 self.logger.warning('teardown: restore state skipped because %s', skip_restore)
             else:
                 self._teardown_step('restore state', lambda: self.restore(snapshot))
-        # ASSUMPTION(hw): needed. The panel locks itself under remote control (manual,
-        # chapter 5); unlocking at the end is assumed to be required to hand it back.
+        # Any remote write sets LOCK to 1, so this must stay the last write of the session
+        # (verified at the SCPI level on SPD4323X, firmware 4.1.2.9R1, 2026-10-05,
+        # docs/hardware_findings.md Q12: LOCK 0 clears it and does not re-lock).
+        # ASSUMPTION(hw): the front panel is visibly unlocked afterwards (lock icon, keys
+        # usable); only LOCK? = 0 has been observed.
         self._teardown_step('unlock front panel', lambda: self.set_lock(False))
         self._close()
 

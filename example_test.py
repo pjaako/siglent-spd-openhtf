@@ -1,7 +1,7 @@
 """Minimal OpenHTF test for a Siglent SPD4000X power supply.
 
     python example_test.py --fake                      # no hardware, simulated supply
-    python example_test.py --resource TCPIP::192.0.2.10::INSTR
+    python example_test.py --resource TCPIP::192.0.2.10::5025::SOCKET
 
 Exit code 0 on PASS, 1 otherwise. The plug turns all outputs off when the test ends.
 """

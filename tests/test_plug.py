@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from siglent_spd_openhtf.fake_resource import FakeSpdResource
+from siglent_spd_openhtf.fake_resource import FakeSpdResource, to_float32
 from siglent_spd_openhtf.plug import (
     CONF,
     Channel,
@@ -539,51 +539,59 @@ def test_guard_reads_the_track_mode_once_for_ch2_and_ch3() -> None:
     assert fake.log.index('OUTPut:TRACK?') < fake.log.index(':SOURce:VOLTage:SET CH2,5')
 
 
-COMBINED = [
-    # model, CH2 independent V/A, series V, parallel A
-    ('SPD4323X', 32, 3.2, 60, 6.4),
-    ('SPD4121X', 12, 10, 24, 20),
-    ('SPD4306X', 30, 6, 60, 12),
-]
+def test_guard_stays_at_the_rating_although_the_instrument_accepts_one_percent_more() -> None:
+    plug, fake = _plug()
+    # The instrument itself takes up to 1.01 x the rating (6.06 V on CH1) without a word ...
+    probe = FakeSpdResource()
+    probe.write(':SOURce:VOLTage:SET CH1,6.05')
+    assert probe.query(':SOURce:VOLTage:SET? CH1') == '6.050000'
+    # ... but the guard refuses before anything is sent: it is the guard, not the fake.
+    with pytest.raises(ValueError, match='rating'):
+        plug.set_voltage(1, 6.05)
+    with pytest.raises(ValueError, match='rating'):
+        plug.set_current(4, 3.21)
+    assert fake.log == ['*IDN?']
+    plug.set_voltage(1, 6.0)  # the rating itself passes
 
 
-@pytest.mark.parametrize(('model', 'ind_v', 'ind_a', 'series_v', 'parallel_a'), COMBINED)
-def test_guard_in_series_mode_uses_the_series_rating(
-    model: str, ind_v: float, ind_a: float, series_v: float, parallel_a: float
-) -> None:
-    plug, fake = _plug(model)
+def test_a_value_above_the_instrument_maximum_is_caught_by_the_read_back() -> None:
+    plug, fake = _plug()
+    with pytest.raises(RuntimeError, match='6.07'):
+        plug.write_verified(':SOURce:VOLTage:SET CH1,6.07', ':SOURce:VOLTage:SET? CH1', 6.07)
+    assert fake.query(':SOURce:VOLTage:SET? CH1') == '6.060000'  # clamped to 1.01 x rating
+
+
+def test_max_voltage_and_max_current_query_the_instrument_limits() -> None:
+    plug, fake = _plug()
+    assert plug.max_voltage(1) == pytest.approx(6.06)
+    assert plug.max_voltage(Channel.CH2) == pytest.approx(32.32)
+    assert plug.max_current(4) == pytest.approx(3.232)
+    assert fake.log[1:] == [
+        ':SOURce:VOLTage:SET? CH1,MAXimum',
+        ':SOURce:VOLTage:SET? CH2,MAXimum',
+        ':SOURce:CURRent:SET? CH4,MAXimum',
+    ]
+    with pytest.raises(ValueError):
+        plug.max_voltage(5)
+    with pytest.raises(ValueError):
+        plug.max_current(0)
+    assert len(fake.log) == 4
+
+
+def test_max_queries_do_not_follow_the_track_mode() -> None:
+    plug, _ = _plug()
     plug.set_track(TrackMode.SERIES)
-    plug.set_voltage(2, series_v)
-    plug.set_current(2, ind_a)
-    start = len(fake.log)
-    with pytest.raises(ValueError, match='rating'):
-        plug.set_voltage(2, series_v + 0.5)
-    with pytest.raises(ValueError, match='rating'):
-        plug.set_current(3, ind_a + 0.1)
-    with pytest.raises(ValueError, match='rating'):
-        plug.set_voltage(1, 100)  # CH1 never follows the track mode
-    assert _new(fake, start) == []
-
-
-@pytest.mark.parametrize(('model', 'ind_v', 'ind_a', 'series_v', 'parallel_a'), COMBINED)
-def test_guard_in_parallel_mode_uses_the_parallel_rating(
-    model: str, ind_v: float, ind_a: float, series_v: float, parallel_a: float
-) -> None:
-    plug, fake = _plug(model)
+    assert plug.max_voltage(2) == pytest.approx(32.32)
     plug.set_track(TrackMode.PARALLEL)
-    plug.set_current(2, parallel_a)
-    plug.set_voltage(2, ind_v)
-    start = len(fake.log)
-    with pytest.raises(ValueError, match='rating'):
-        plug.set_current(2, parallel_a + 0.1)
-    with pytest.raises(ValueError, match='rating'):
-        plug.set_voltage(3, ind_v + 0.5)
-    assert _new(fake, start) == []
+    assert plug.max_current(2) == pytest.approx(3.232)
 
 
-@pytest.mark.parametrize(('model', 'ind_v', 'ind_a', 'series_v', 'parallel_a'), COMBINED)
+@pytest.mark.parametrize(
+    ('model', 'ind_v', 'ind_a'),
+    [('SPD4323X', 32, 3.2), ('SPD4121X', 12, 10), ('SPD4306X', 30, 6)],
+)
 def test_guard_in_independent_mode_uses_the_single_channel_rating(
-    model: str, ind_v: float, ind_a: float, series_v: float, parallel_a: float
+    model: str, ind_v: float, ind_a: float
 ) -> None:
     plug, _ = _plug(model)
     plug.set_voltage(2, ind_v)
@@ -599,6 +607,65 @@ def test_guard_follows_a_return_to_independent_mode() -> None:
     plug.set_track(TrackMode.SERIES)
     plug.set_track(TrackMode.INDEPENDENT)
     with pytest.raises(ValueError):
+        plug.set_voltage(2, 33)
+    plug.set_voltage(2, 5)  # writing is possible again
+
+
+# ---- coupled modes (open question 21) --------------------------------------------------------
+
+
+@pytest.mark.parametrize('mode', [TrackMode.SERIES, TrackMode.PARALLEL])
+@pytest.mark.parametrize('ch', [2, 3])
+def test_setpoints_of_ch2_and_ch3_are_refused_in_a_coupled_mode(mode: TrackMode, ch: int) -> None:
+    plug, fake = _plug()
+    plug.set_track(mode)
+    start = len(fake.log)
+    for call in (
+        lambda: plug.set_voltage(ch, 5),
+        lambda: plug.set_current(ch, 1),
+        lambda: plug.configure_channel(ch, voltage=5),
+        lambda: plug.configure_channel(ch, ovp=10, ocp_enabled=True),
+    ):
+        with pytest.raises(RuntimeError, match='question 21'):
+            call()
+    assert not [c for c in _new(fake, start) if '?' not in c]  # nothing was sent
+    assert fake.channels[2].voltage == 0
+
+
+@pytest.mark.parametrize('mode', [TrackMode.SERIES, TrackMode.PARALLEL])
+def test_ch1_and_ch4_and_reads_are_unaffected_by_a_coupled_mode(mode: TrackMode) -> None:
+    plug, fake = _plug()
+    plug.set_track(mode)
+    plug.set_voltage(1, 3)
+    plug.set_current(4, 1)
+    plug.configure_channel(1, ovp=4)
+    plug.set_ovp(2, 10)  # OVP/OCP writes are not part of the refusal
+    assert plug.voltage_setpoint(2) == 0
+    assert (fake.channels[1].voltage, fake.channels[4].current) == (3, 1)
+
+
+def test_the_refusal_applies_with_an_unknown_model_too() -> None:
+    fake = FakeSpdResource()
+    fake.model = 'SPD9999X'
+    plug, _ = _plug(fake=fake)
+    plug.set_track(TrackMode.SERIES)
+    with pytest.raises(RuntimeError, match='question 21'):
+        plug.set_voltage(2, 5)
+
+
+def test_the_refusal_uses_a_track_mode_read_from_the_instrument() -> None:
+    fake = FakeSpdResource()
+    fake.track = 1  # changed from the panel before the plug looked
+    plug, _ = _plug(fake=fake)
+    with pytest.raises(RuntimeError, match='SERIES'):
+        plug.set_voltage(3, 5)
+    assert fake.log == ['*IDN?', 'OUTPut:TRACK?']
+
+
+def test_the_guard_is_checked_before_the_coupled_mode_refusal() -> None:
+    plug, _ = _plug()
+    plug.set_track(TrackMode.SERIES)
+    with pytest.raises(ValueError, match='rating'):
         plug.set_voltage(2, 33)
 
 
@@ -639,6 +706,16 @@ def test_ovp_above_the_fake_rating_is_caught_by_read_back() -> None:
         plug.set_ovp(1, 7)
     with pytest.raises(RuntimeError, match=':SOURce:OCP CH1,4'):
         plug.set_ocp(1, 4)
+
+
+def test_float32_read_back_of_the_instrument_is_accepted() -> None:
+    plug, fake = _plug()
+    assert plug.ovp(2) == pytest.approx(35.2)  # the supply answers 35.200001
+    assert fake.log[-1] == ':SOURce:OVP? CH2'
+    plug.set_ovp(2, 35.2)  # read-back 35.200001 matches within the tolerance
+    plug.set_ovp(1, 6.6)
+    plug.set_ocp(3, 3.52)
+    assert (plug.ovp(1), plug.ocp(3)) == (pytest.approx(6.6), pytest.approx(3.52))
 
 
 @pytest.mark.parametrize('seconds', [-1, 3600.01])
@@ -802,20 +879,48 @@ def test_set_track_sends_the_word_and_reads_back() -> None:
     plug.set_track(TrackMode.SERIES)
     plug.set_track(TrackMode.PARALLEL)
     plug.set_track(TrackMode.INDEPENDENT)
+    ch3 = [':SOURce:VOLTage:SET? CH3', ':SOURce:CURRent:SET? CH3']
     assert fake.log[1:] == [
-        'OUTPut? CH2',
-        'OUTPut? CH3',
-        'OUTPut:TRACK SERIES',
-        'OUTPut:TRACK?',
-        'OUTPut? CH2',
-        'OUTPut? CH3',
-        'OUTPut:TRACK PARALLEL',
-        'OUTPut:TRACK?',
-        'OUTPut? CH2',
-        'OUTPut? CH3',
-        'OUTPut:TRACK INDEPENDENT',
-        'OUTPut:TRACK?',
+        *('OUTPut? CH2', 'OUTPut? CH3', *ch3, 'OUTPut:TRACK SERIES', 'OUTPut:TRACK?', *ch3),
+        *('OUTPut? CH2', 'OUTPut? CH3', *ch3, 'OUTPut:TRACK PARALLEL', 'OUTPut:TRACK?', *ch3),
+        *('OUTPut? CH2', 'OUTPut? CH3', *ch3, 'OUTPut:TRACK INDEPENDENT', 'OUTPut:TRACK?', *ch3),
     ]
+
+
+def test_set_track_warns_when_ch3_setpoints_were_overwritten(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    plug, fake = _plug()
+    plug.configure_channel(2, voltage=14, current=3)
+    plug.configure_channel(3, voltage=12, current=2)
+    with caplog.at_level(logging.WARNING):
+        plug.set_track(TrackMode.SERIES)
+    assert 'CH3 setpoints changed from 12 V / 2 A to 14 V / 3 A' in caplog.text
+    assert (fake.channels[3].voltage, fake.channels[3].current) == (14, 3)
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        plug.set_track(TrackMode.PARALLEL)  # CH3 already equals CH2
+        plug.set_track(TrackMode.INDEPENDENT)  # and stays
+    assert 'CH3 setpoints' not in caplog.text
+    assert (fake.channels[3].voltage, fake.channels[3].current) == (14, 3)
+
+
+def test_set_track_still_works_when_the_ch3_read_fails(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    plug, fake = _plug()
+    real_query = fake.query
+
+    def broken(message: str) -> str:
+        if message.endswith('CH3') and message.startswith(':SOURce:'):
+            raise OSError('timeout')
+        return real_query(message)
+
+    fake.query = broken  # type: ignore[method-assign]
+    with caplog.at_level(logging.WARNING):
+        plug.set_track(TrackMode.SERIES)
+    assert fake.track == 1
+    assert 'cannot read the CH3 setpoints' in caplog.text
 
 
 def test_track_query_maps_numbers() -> None:
@@ -1047,8 +1152,69 @@ def test_restore_writes_the_track_mode_first_and_only_if_it_differs() -> None:
     assert fake.track == 0
     assert new[0] == 'OUTPut:TRACK?'
     track_write = new.index('OUTPut:TRACK INDEPENDENT')
-    first_setpoint = min(i for i, c in enumerate(new) if c.startswith(':SOURce:'))
-    assert track_write < first_setpoint
+    first_channel_read = new.index(':SOURce:OVP? CH1')
+    assert track_write < first_channel_read
+    assert not [c for c in new[track_write + 1 :] if '?' not in c]  # nothing differs: no writes
+
+
+def test_restore_reads_first_and_writes_only_what_differs() -> None:
+    plug, fake = _plug()
+    plug.configure_channel(1, voltage=3, current=0.5, ovp=4)
+    snap = plug.snapshot()
+    plug.set_voltage(1, 2)
+    plug.set_ocp_delay(3, 1.5)
+    start = len(fake.log)
+    plug.restore(snap)
+    new = _new(fake, start)
+    assert [c for c in new if '?' not in c] == [
+        ':SOURce:VOLTage:SET CH1,3',
+        'OCP:DELay CH3,0',
+    ]
+    assert new.index(':SOURce:VOLTage:SET? CH1') < new.index(':SOURce:VOLTage:SET CH1,3')
+    assert fake.channels[1].voltage == 3
+    start = len(fake.log)
+    plug.restore(snap)  # now everything matches: reads only
+    assert not [c for c in _new(fake, start) if '?' not in c]
+
+
+def test_restore_of_a_value_between_rating_and_instrument_maximum_is_reported() -> None:
+    # The panel held 6.03 V (between the 6 V rating and the 6.06 V maximum); once changed, the
+    # guard refuses to write it back and nothing is sent for that item.
+    fake = FakeSpdResource()
+    fake.write('VOLTage CH1,6.03')
+    plug, _ = _plug(fake=fake, restore_state=True)
+    plug.set_voltage(1, 1)
+    start = len(fake.log)
+    with pytest.raises(RuntimeError, match='CH1 voltage'):
+        plug.restore(plug._snapshot or {})
+    assert not [c for c in _new(fake, start) if c.startswith(':SOURce:VOLTage:SET CH1')]
+
+
+@pytest.mark.parametrize('mode', [TrackMode.SERIES, TrackMode.PARALLEL])
+def test_restore_skips_ch2_and_ch3_setpoints_in_a_coupled_mode_and_reports_them(
+    mode: TrackMode,
+) -> None:
+    plug, fake = _plug()
+    plug.set_track(mode)
+    snap = plug.snapshot()
+    snap['channels'][1]['voltage'] = 2.0
+    snap['channels'][2]['voltage'] = 7.0
+    snap['channels'][3]['current'] = 1.0
+    snap['channels'][3]['ovp'] = 20.0
+    start = len(fake.log)
+    with pytest.raises(RuntimeError) as err:
+        plug.restore(snap)
+    message = str(err.value)
+    assert 'CH2 voltage/current' in message
+    assert 'CH3 voltage/current' in message
+    assert 'question 21' in message
+    writes = [c for c in _new(fake, start) if '?' not in c]
+    assert ':SOURce:VOLTage:SET CH1,2' in writes  # CH1 is restored
+    assert ':SOURce:OVP CH3,20' in writes  # so are the protection values of CH3
+    assert not [
+        c for c in writes if c.startswith((':SOURce:VOLTage:SET CH2', ':SOURce:CURRent:SET CH3'))
+    ]
+    assert fake.channels[2].voltage == 0
 
 
 def test_restore_never_turns_an_output_on() -> None:
@@ -1090,8 +1256,8 @@ def test_restore_skips_ch2_and_ch3_when_the_track_restore_is_refused() -> None:
     plug, fake = _plug()
     snap = plug.snapshot()
     plug.set_track(TrackMode.SERIES)
-    plug.configure_channel(2, voltage=40)
-    plug.configure_channel(3, voltage=1)
+    fake.channels[2].voltage = 40  # set "from the panel": the plug refuses to write these
+    fake.channels[3].voltage = 1
     plug.configure_channel(1, voltage=2)
     fake.reject = {'OUTPut:TRACK': 'refused'}
     start = len(fake.log)
@@ -1159,6 +1325,22 @@ def test_teardown_turns_outputs_off_unlocks_and_closes() -> None:
     ]
     assert not any(c.output for c in fake.channels.values())
     assert fake.lock == 0
+    assert fake.closed
+
+
+def test_teardown_leaves_the_panel_unlocked_with_the_unlock_as_the_last_write() -> None:
+    plug, fake = _plug(teardown_off=True, restore_state=True)
+    plug.configure_channel(1, voltage=3, ovp=4)
+    plug.set_output(1, True)
+    assert fake.lock == 1  # every remote write locks the panel on the real supply
+    plug.tearDown()
+    assert fake.lock == 0
+    writes = [c for c in fake.log if '?' not in c]
+    assert writes[-1] == ':SOURce:LOCK:STATe OFF'
+    assert writes.count(':SOURce:LOCK:STATe OFF') == 1
+    assert 'OUTPut:ALL 0' in writes
+    assert any(c.startswith(':SOURce:OVP CH1') for c in writes[:-1])  # the restore wrote before
+    assert fake.log[-1] == ':SOURce:LOCK:STATe?'  # only the read-back follows the unlock
     assert fake.closed
 
 
@@ -1291,7 +1473,7 @@ def test_teardown_restores_state_when_enabled() -> None:
     plug.set_output(1, True)
     plug.tearDown()
     assert fake.channels[1].voltage == 0
-    assert fake.channels[1].ovp == 6
+    assert fake.channels[1].ovp == to_float32(6.6)  # the supply's default, not 4 V
     assert fake.channels[1].output is False
     assert fake.closed
 

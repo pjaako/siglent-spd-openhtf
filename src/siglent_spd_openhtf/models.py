@@ -20,10 +20,24 @@ class Model(NamedTuple):
     series: ChannelRating  # CH2 + CH3 in series
     parallel: ChannelRating  # CH2 + CH3 in parallel
     total_power_w: float
-    # True once hardware acceptance (docs/acceptance.md) has been run on that model. It is
-    # False for every model until then, the SPD4323X included (it is the target, not yet tested).
+    # True once hardware acceptance (docs/acceptance.md) has been run on that model. It stays
+    # False for every model, the SPD4323X included, until experiment 30 (output on) and the plug
+    # write smoke have run: the first acceptance run (2026-10-05) covered the raw socket with
+    # all outputs off only (docs/hardware_findings.md).
     tested: bool
 
+
+# Instrument behaviour observed on the SPD4323X (firmware 4.1.2.9R1, 2026-10-05, raw socket).
+# The rating table below stays the reference for the plug's guard; these two constants only
+# describe what the instrument itself accepts, and are used by the fake.
+#
+# `VOLTage? CHn,MAX` / `CURRent? CHn,MAX` answer 1.01 x the rated value on every channel
+# (6.06 V, 32.32 V, 3.232 A); a larger setpoint is clamped to it silently
+# (docs/hardware_findings.md Q9, Q14). The extra 1 % is headroom, not a specification.
+SETPOINT_MAX_FACTOR = 1.01
+# OVP and OCP accept 0.1 x .. 1.1 x the rated value (clamped silently outside); the supply
+# ships with, and `DEFault` selects, the 1.1 x maximum (docs/hardware_findings.md Q9, Q14).
+PROTECTION_RANGE = (0.1, 1.1)
 
 MODELS: dict[str, Model] = {
     'SPD4323X': Model(
