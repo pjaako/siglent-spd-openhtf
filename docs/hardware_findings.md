@@ -701,23 +701,22 @@ Both halves keep their value after returning to INDEPENDENT.
 ```
 acc 684-685   W 'OUTPut:TRACK SERIES' -> 'OUTPut:TRACK?' -> b'1\n'
 acc 686-687   (SERIES) 'VOLTage? CH2' -> b'28.000000\n'  (CH2 was 14 V)   'CURRent? CH2' -> b'3.000000\n'
-acc 697-698   (SERIES) 'VOLTage? CH3' -> b'14.000000\n'                    'CURRent? CH3' -> b'3.100000\n'
-acc 735-739   W ':SOURce:VOLTage:SET CH2,20' -> ':SOURce:VOLTage:SET? CH2' -> b'20.000000\n'  216.3 ms
+acc 692-693   (SERIES) 'VOLTage? CH3' -> b'14.000000\n'                    'CURRent? CH3' -> b'3.100000\n'
+acc 742-744   W ':SOURce:VOLTage:SET CH2,20' -> ':SOURce:VOLTage:SET? CH2' -> b'20.000000\n'  216.3 ms
                                                 ':SOURce:VOLTage:SET? CH3' -> b'10.000000\n'
-acc 740-742   W ':SOURce:VOLTage:SET CH2,MAXimum' -> CH2 b'32.320000\n'  CH3 b'16.160000\n'
-acc 743-745   W ':SOURce:OVP CH2,MAXimum' -> ':SOURce:OVP? CH2' -> b'35.200001\n'  ':SOURce:OVP? CH3' -> b'35.200001\n'
-acc 759-761   W 'OUTPut:TRACK PARALLEL' -> b'2\n';  (PARALLEL) CH2 V b'16.160000\n' (the half kept from SERIES)
+acc 745-747   W ':SOURce:VOLTage:SET CH2,MAXimum' -> CH2 b'32.320000\n'  CH3 b'16.160000\n'
+acc 748-750   W ':SOURce:OVP CH2,MAXimum' -> ':SOURce:OVP? CH2' -> b'35.200001\n'  ':SOURce:OVP? CH3' -> b'35.200001\n'
+acc 759-762   W 'OUTPut:TRACK PARALLEL' -> b'2\n';  (PARALLEL) CH2 V b'16.160000\n' (the half kept from SERIES)
               'CURRent? CH2' -> b'6.000000\n' (2 x 3 A)   'CURRent? CH3' -> b'3.000000\n'
-acc 764-766   W ':SOURce:CURRent:SET CH2,5' -> ':SOURce:CURRent:SET? CH2' -> b'5.000000\n'
+acc 769-771   W ':SOURce:CURRent:SET CH2,5' -> ':SOURce:CURRent:SET? CH2' -> b'5.000000\n'
                                                ':SOURce:CURRent:SET? CH3' -> b'2.500000\n'
-acc 767-769   W ':SOURce:CURRent:SET CH2,MAXimum' -> CH2 b'3.232000\n'  CH3 b'1.616000\n'
-acc 770-771   W ':SOURce:OCP CH2,MAXimum' -> CH2 b'3.520000\n'  CH3 b'3.520000\n'
-acc 790-815   (after INDEPENDENT) CH2 V b'16.160000\n' I b'1.616000\n'; CH3 V b'16.160000\n' I b'1.616000\n'
+acc 772-774   W ':SOURce:CURRent:SET CH2,MAXimum' -> CH2 b'3.232000\n'  CH3 b'1.616000\n'
+acc 775-777   W ':SOURce:OCP CH2,MAXimum' -> CH2 b'3.520000\n'  CH3 b'3.520000\n'
+acc 786-790   (after INDEPENDENT) CH2 V b'16.160000\n' I b'1.616000\n'; CH3 V b'16.160000\n' I b'1.616000\n'
               (the tool then wrote CH2 14 V / 3 A and CH3 12 V / 2 A back, each read back)
 ```
 
-(The line numbers above are those of the `OUTPut:TRACK`/`SET` lines, the replies are on the following
-lines of the log; the times are `20:35:36.055` to `20:35:38.876`.)
+(Log times `20:35:34.4` to `20:35:38.9`.)
 
 Conclusions:
 - The write side is the **combined value**, so the guess in SPEC.md (and in the fake) was right: the
@@ -731,10 +730,10 @@ Conclusions:
 - **CH3's reading in a coupled mode is the per-half value of CH2's write**; a write to CH3 in SERIES or
   PARALLEL, the voltage of CH2 in PARALLEL and the current of CH2 in SERIES were **not** written. Those stay
   open (the plug keeps refusing them).
-- The `3.100000` that `CURRent? CH3` shows in SERIES while CH2 is 3 A reproduced (acc 698, 733-735). It
+- The `3.100000` that `CURRent? CH3` shows in SERIES while CH2 is 3 A reproduced (acc 693). It
   is not an effect of the write (it is there before any write); the fake does not model it.
 - The half values persist: after the sequence CH2 and CH3 both read 16.16 V and 1.616 A in INDEPENDENT.
-  The tool restored CH2 and CH3 to 14 V / 3 A and 12 V / 2 A with read-back (acc 816-830, 1308-1330 and the
+  The tool restored CH2 and CH3 to 14 V / 3 A and 12 V / 2 A with read-back (acc 791-806 and the
   restore summary); the owner confirmed CH3 at 12 V / 2 A on the panel.
 
 ### Q22 Output OFF delay semantics: answered
@@ -745,15 +744,15 @@ to 0 while the switch-off is pending turns the output off at once. Times relativ
 
 | case (delay 2 s, CH1 1.0 V, no load) | `OUTPut? CH1` | `MEASure:VOLTage? CH1` |
 |---|---|---|
-| A `OUTPut CH1,0` | `1` until 1.91 s, `0` from 2.01 s | 0.999 V until 2.01 s, 0.862 V at 2.12 s, below 0.1 V at 2.60 s |
+| A `OUTPut CH1,0` | `1` until 1.91 s, `0` from 2.009 s | 0.999 V until 2.01 s, 0.862 V at 2.12 s, below 0.1 V at 2.60 s |
 | B `OUTPut:ALL 0` | `1` until ~1.9 s, `0` from 2.008 s | 0.999 V until ~2.0 s, 0.770 V at the first sample after, below 0.1 V at 2.60 s |
 | C `OUTPut CH1,0`, then `OUTPut:OFF:DELay CH1,0` at 0.50 s | `1` until 0.50 s, `0` at 0.547 s (46 ms after the write) | 0.999 V, 0.663 V from 0.55 s, below 0.1 V at 1.10 s |
 
 ```
-acc 1652-1655  W 'OUTPut:OFF:DELay CH1,2' -> 'OUTPut:OFF:DELay? CH1' -> b'2.000000\n'  122.6 ms;  W 'OUTPut CH1,1'
-acc 1657-1660  W 'OUTPut CH1,0' -> 'OUTPut? CH1' -> b'1\n' 14 ms ... b'1\n' at 21:21:21.76 ... b'0\n' at 21:21:22.82
-acc 1658-1666  W 'OUTPut:ALL 0' -> 'OUTPut? CH1' -> b'1\n' 0.250 s ... b'0\n' 2.008 s
-acc 1728-1740  W 'OUTPut CH1,0' -> b'1\n'; W 'OUTPut:OFF:DELay CH1,0' -> 'OUTPut? CH1' -> b'0\n'  46.1 ms
+acc 1582-1584  W 'OUTPut:OFF:DELay CH1,2';  W 'OUTPut CH1,1'
+acc 1588-1629  W 'OUTPut CH1,0' (21:21:16.032) -> 'OUTPut? CH1' b'1\n' at 16.046 ... b'1\n' at 17.94 (line 1627), b'0\n' at 18.041 (line 1629)
+acc 1654-1699  W 'OUTPut CH1,1';  W 'OUTPut:ALL 0' (21:21:20.480, line 1658) -> 'OUTPut? CH1' b'1\n' at 20.730 ... b'0\n' at 22.488 (line 1699)
+acc 1728-1740  W 'OUTPut CH1,0' (21:21:24.873) -> b'1\n' at 24.897;  W 'OUTPut:OFF:DELay CH1,0' (line 1739, 25.374) -> 'OUTPut? CH1' -> b'0\n' at 25.420 (46.1 ms)
 ```
 
 Consequences for the plug: the order in `tearDown()` (zero a non-zero OFF delay of every channel that is
@@ -855,7 +854,7 @@ No trip was provoked (nothing connected, no deliberate OVP/OCP fault). `1` = tri
 
 | marker | where | verdict | evidence |
 |---|---|---|---|
-| write side of question 21 | plug `_require_independent`, `restore()`; fake `_do_write` | **answered**: CH2's write is the combined value, CH3 follows half; clamp on the combined value at the per-channel `MAX`. CH3 writes, CH2 current in SERIES and CH2 voltage in PARALLEL **still untested** | acc 735-771 |
+| write side of question 21 | plug `_require_independent`, `restore()`; fake `_do_write` | **answered**: CH2's write is the combined value, CH3 follows half; clamp on the combined value at the per-channel `MAX`. CH3 writes, CH2 current in SERIES and CH2 voltage in PARALLEL **still untested** | acc 742-777 |
 | `OUTPut?` during OFF delay | fake `_set_output` | **confirmed** (also for `OUTPut:ALL 0`); plus: delay 0 while pending switches off at once, which the fake lacked | cases A, B, C |
 | unlock needed / panel visibly unlocked | plug `tearDown()` | **confirmed** (SCPI and panel) | acc 1315-1316, owner |
 | protection state `1` = tripped | plug `protection_status`; fake | **still open** (no trip) | - |
