@@ -900,3 +900,90 @@ No trip was provoked (nothing connected, no deliberate OVP/OCP fault). `1` = tri
 | ON/OFF delay clamp at 3600 s | outputs off is enough |
 | `MODE` on CH1/CH4, `VOLTage?` without channel (CH1 vs panel channel) | outputs off, panel state |
 | SPD4121X, SPD4306X (Q14) | other models |
+
+
+---
+---
+
+# Hardware findings: SPD4323X run 2 addendum (extra visit, outputs off)
+
+| item | value |
+|---|---|
+| instrument / firmware | Siglent SPD4323X, serial `SPD43XXXXXXXXX`, firmware `4.1.2.9R1`, address `192.0.2.10` in this document |
+| date | 2026-10-04, later the same day as run 2 (log time 22:35) |
+| tool | `tools/hw_acceptance.py --only 22 --report run3.local.md`: the new experiment 22 `followups` (outputs off, track INDEPENDENT at the start, owner at the instrument, CH2 selected on the front panel before the run) |
+| result | clean restore (`36 items, 0 written back, 36 unchanged, 0 FAILED`, snapshot `restored`), all outputs `0` at the end, `MODE? CH1` and `MODE? CH4` back at `0`, track back to INDEPENDENT |
+| not run | everything that needs an output on (see "Still open after the addendum") |
+
+"acc3 N" is line N of the `hw_acceptance.local.log` of this visit (a new file; the log of run 2 is kept locally as `hw_acceptance_run2.local.log`, which is what "acc N" above refers to). Replies are raw, serial number not involved.
+
+## Q21 (rest): coupled modes, what was not tried before
+
+**SERIES** (CH2 14 V / 3 A, CH3 12 V / 2 A before the track change; entering SERIES: CH2 reads 28 V, CH3 14 V / 3.1 A):
+
+| write | CH2 / CH3 read-back | meaning |
+|---|---|---|
+| `:SOURce:VOLTage:SET CH2,40` | `40.000000` / `20.000000` | combined value, half on CH3 (as in run 2) |
+| `:SOURce:VOLTage:SET CH2,70` | `60.000000` / `30.000000` | **clamped at 60 V = the series rating**, not at twice `MAX` (64.64) |
+| `:SOURce:VOLTage:SET CH2,200` | `60.000000` / `30.000000` | same |
+| `:SOURce:CURRent:SET CH2,2` | `2.000000` / `2.100000` | the current is per channel; **CH3 shows CH2's current + 0.1 A** |
+| `:SOURce:VOLTage:SET CH3,6` | `60.000000` / `30.000000` | **ignored**, nothing changed |
+| `:SOURce:CURRent:SET CH3,1.5` | `2.000000` / `2.100000` | **ignored**, nothing changed |
+
+**PARALLEL** (entering from SERIES: CH2 30 V / 4 A, CH3 30 V / 2 A; the 4 A is 2 x the stored 2 A):
+
+| write | CH2 / CH3 read-back | meaning |
+|---|---|---|
+| `:SOURce:CURRent:SET CH2,7` | `6.464000` / `3.232000` | combined, **clamped at twice `MAX`** (6.464 A), not at the 6.4 A rating |
+| `:SOURce:CURRent:SET CH2,20` | `6.464000` / `3.232000` | same |
+| `:SOURce:VOLTage:SET CH2,10` | `10.000000` / `10.000000` | the voltage is per channel, **CH3 takes it too** (not halved) |
+| `:SOURce:VOLTage:SET CH3,8` | `10.000000` / `10.000000` | **ignored** |
+| `:SOURce:CURRent:SET CH3,1` | `6.464000` / `3.232000` | **ignored** |
+
+```
+acc3 100-110  W 'OUTPut:TRACK SERIES'; before the writes CH2 V b'28.000000\n', CH3 V b'14.000000\n', CH3 I b'3.100000\n'
+acc3 110-125  the SERIES rows above (W at lines 110, 113, 116, 119, 122, 125; each followed by CH2 and CH3 queries)
+acc3 136-158  W 'OUTPut:TRACK PARALLEL' and the PARALLEL rows (W at lines 146, 149, 152, 155, 158)
+```
+
+Conclusions:
+- **CH3 is a follower in a coupled mode**: a voltage or current written to it is silently ignored, so the plug refuses the write before sending it.
+- The current of CH2 in SERIES and the voltage of CH2 in PARALLEL are written per channel and read back on CH2 as written, so they are allowed for CH2.
+- The **+0.1 A** on CH3's current in SERIES explains the `3.100000` of run 2: it is a display rule, `CH3 I = CH2 I + 0.1` (3.0 -> 3.1, 2.0 -> 2.1), nothing is stored (after PARALLEL CH3 reads CH2's stored current again). The fake models it; `set_track()` no longer warns about it.
+- Limits of the combined value: **60 V in SERIES, 6.464 A in PARALLEL** (the `MAXimum` keyword stays per channel: 32.32 V and 3.232 A). The plug's guard for CH2 (series 60 V / parallel 6.4 A rating) is therefore equal to resp. just below what the instrument takes. Not tried: the current of CH2 in SERIES and the voltage of CH2 in PARALLEL above the per-channel `MAX`.
+- Restore of CH2 and CH3 to 14 V / 3 A and 12 V / 2 A succeeded with read-back (`10 items, FAILED: none`).
+
+## Q9 (rest): ON/OFF delay writes clamp like `OCP:DELay`
+
+Both `OUTPut:ON:DELay CH1,<x>` and `OUTPut:OFF:DELay CH1,<x>`: `3601` -> `3600.000000`, `-1` -> `0.000000`, `MAXimum` -> `3600.000000`, `MINimum` -> `0.000000`, `DEFault` -> `0.000000`, `0` -> `0.000000` (acc3 76-97). Marker `same as OCP:DELay` resolved.
+
+## Q8 (rest): `MODE` on CH1/CH4 and `VOLTage?` without a channel
+
+- `MODE? CH4` answers `0` (like `MODE? CH1`). `MODE CH1,1` and `MODE CH4,1` are accepted without error but ignored: the query still answers `0` (acc3 64-75). The plug's `ValueError` for CH1/CH4 stays correct (a write does nothing). Whether such an ignored write sets `LOCK` was not checked.
+- `VOLTage?` without a channel answered `5.000000` and `CURRent?` `2.000000`, which are **CH1's** values (CH1 5 V / 2 A, CH2 14 V / 3 A), **with CH2 selected on the front panel** (owner's observation before the run) (acc3 54-55). So it is CH1, not the panel-selected channel. The plug never omits the channel.
+
+## Verdict on the markers touched
+
+| marker | verdict |
+|---|---|
+| write side of question 21: CH3, other quantity of CH2, numeric limit | **answered** (above) |
+| same as `OCP:DELay` (ON/OFF delay clamp) | **confirmed** |
+| `MODE` on CH1/CH4 not tried | **answered**: `MODE? CH4` -> `0`, writes ignored |
+| CH1 or the panel-selected channel | **answered**: CH1 |
+| new, remaining (fake): lock effect of an ignored write (CH3 in a coupled mode, `MODE` on CH1/CH4); clamp of the current of CH2 in SERIES and the voltage of CH2 in PARALLEL above the per-channel `MAX`; MINimum/DEFault in a combined coupled write | **not tried** |
+
+## Code changes that follow (done)
+
+- plug: in a coupled mode every voltage/current write on **CH2** is allowed on a `tested` model (read-back verified, guard series 60 V / parallel 6.4 A for the combined quantity, per-channel rating for the other), every write on **CH3** raises before anything is sent; `restore()` writes CH2 (both quantities) and reports a CH3 item only if it still differs afterwards; `set_track()` ignores CH3's SERIES +0.1 A display offset in its "setpoints changed" warning.
+- fake: CH3 writes ignored in a coupled mode, series voltage limit 60 V, parallel current limit 2 x `MAX`, voltage of CH2 in PARALLEL also on CH3, CH3 current in SERIES = CH2 + 0.1 A, ON/OFF delay clamps verified, `MODE? CH4` -> `0`.
+
+## Still open after the addendum
+
+| item | needs |
+|---|---|
+| USB identity and terminator; VXI-11, web, telnet (Q2, Q3) | USB cable / direct LAN |
+| protection state `1` = tripped; state after a trip and after `RESET:PROTect` (Q10) | a real trip |
+| `OUTPut:TRACK` while an output is on (Q13) | owner's decision (live output) |
+| `OUTPut:ALL?` with mixed channel states | two outputs on, nothing connected |
+| lock effect of ignored writes; the two other-quantity clamps above `MAX`; MINimum/DEFault combined | outputs off |
+| SPD4121X, SPD4306X (Q14) | other models |

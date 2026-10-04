@@ -51,17 +51,17 @@ warning and only the read-back after each setter protects against out-of-range v
   what the supply reports as its own limit (`:SOURce:VOLTage:SET? CHn,MAXimum`, for example
   6.06 V on CH1) for information; the guard does not use them. A `restore()` of a value that
   sat between the rating and that limit fails that item with `ValueError` and is reported.
-- **Series/parallel: only the verified writes.** While the track mode is SERIES or PARALLEL,
-  only `set_voltage(2, ...)` in SERIES and `set_current(2, ...)` in PARALLEL are allowed. On the
-  SPD4323X such a write is the *combined* value (read back unchanged from CH2; CH3 follows
-  with half), and its guard is the model's series (60 V) or parallel (6.4 A) rating. Every
-  other voltage/current write on CH2 or CH3 in a coupled mode (CH3, the current of CH2 in
-  SERIES, the voltage of CH2 in PARALLEL), also through `configure_channel`, raises
-  `RuntimeError` naming open question 21 before anything is sent, because it was never tried on
-  hardware; `restore()` skips those items and reports the ones that differ. The two allowed
-  writes need a model marked `tested` (the SPD4323X; an unknown model or an untested one
-  refuses them too), and every CH2/CH3 voltage or current setter reads `OUTPut:TRACK?` fresh
-  first, since the track mode can be changed from the panel behind the plug's back.
+- **Series/parallel: write CH2, CH3 follows.** While the track mode is SERIES or PARALLEL, a
+  voltage or current written to **CH2** is verified by read-back as usual. On the SPD4323X the
+  voltage in SERIES and the current in PARALLEL are the *combined* value (CH3 follows with half;
+  the guard is the model's series 60 V / parallel 6.4 A rating), the current in SERIES and the
+  voltage in PARALLEL are per channel (guard: the channel rating). A voltage or current written
+  to **CH3** in a coupled mode is ignored by the instrument, so `set_voltage`, `set_current` and
+  `configure_channel` raise `RuntimeError` before sending it. The CH2 writes need a model marked
+  `tested` (the SPD4323X; an unknown or untested model refuses them too), and every CH2/CH3
+  voltage or current setter reads `OUTPut:TRACK?` fresh first, since the track mode can be
+  changed from the panel behind the plug's back. `restore()` writes CH2 and leaves CH3 to
+  follow; it reports a CH3 item only if it still differs.
 - **`set_track()` changes CH3.** Entering SERIES or PARALLEL copies CH2's voltage and current
   setpoints into CH3, and CH3 keeps them after going back to INDEPENDENT. `set_track()` reads
   CH3's setpoints before and after and logs a warning naming both values when they changed.
@@ -177,7 +177,8 @@ protection trips are not covered.
 10. In series `VOLTage? CH2` is the combined voltage (`28.000000` with 14 V per half), in
     parallel `CURRent? CH2` the combined current (`6.000000` with 3 A per half); the `MAX`
     queries ignore the coupling (`32.320000` / `3.232000`). A *write* is the combined value
-    too, see item 18.
+    too, see item 18. In SERIES `CURRent? CH3` shows CH2's current plus 0.1 A (3 A -> `3.100000`),
+    a display rule: nothing is stored.
 11. Any remote write locks the front panel (`LOCK?` -> `1`); `LOCK 0` unlocks and the write
     itself does not re-lock; queries never lock.
 12. One socket client at a time: a second connection is accepted but gets no reply while
@@ -200,18 +201,30 @@ protection trips are not covered.
     `CURRent CH2,5` reads back `5.000000` (above the per-channel `MAX` of 3.232 A) and CH3
     reads `2.500000`. The `MAXimum` keyword still means the per-channel value (`32.320000` V
     combined in SERIES, `3.232000` A in PARALLEL). Both halves keep their value after going
-    back to INDEPENDENT. OVP and OCP stay per channel. Writes to CH3 in a coupled mode were not
-    tried.
+    back to INDEPENDENT. OVP and OCP stay per channel. The combined value is limited to 60 V in
+    SERIES (`VOLTage CH2,70` and `,200` read back `60.000000`) and to 6.464 A in PARALLEL
+    (`CURRent CH2,7` and `,20` read back `6.464000`). The current of CH2 in SERIES and the voltage
+    of CH2 in PARALLEL are per channel (the voltage then applies to CH3 as well). Writes to CH3 in
+    a coupled mode are ignored (both channels read back unchanged).
 19. `VOLTage CH5,1` and `VOLTage CH0,1` are ignored: CH1 to CH4 stay as they were (CH4 read back
     before and after, and `0 V / 0 A` seen on the panel); `*ESR?` stays 0 for them.
 20. The bit-5 behaviour of `*ESR?` is not explained by an "empty error list": after `*CLS`,
     repeated unknown queries set it every time (`32`, `32`, `32`), while two unknown queries in
     the read-only phase did not. Read-back stays the only error check.
 
+21. The ON and OFF delay writes clamp like `OCP:DELay`: `3601` -> `3600.000000`, `-1` -> `0.000000`,
+    `MAXimum` 3600, `MINimum` and `DEFault` 0.
+22. `MODE? CH4` answers `0` like `MODE? CH1`; `MODE CH1,1` and `MODE CH4,1` are accepted and
+    ignored (the query still answers `0`).
+23. `VOLTage?` without a channel answers CH1's value (`5.000000`), also with CH2 selected on the
+    front panel.
+
+Items 21-23 and the extra items of 18 were found in the second visit of 2026-10-04 (outputs off,
+experiment 22).
+
 Still unknown: USB (identity, terminator) and VXI-11, protection trips (`1` = tripped is
-assumed), `OUTPut:TRACK` with an output on, `OUTPut:ALL?` with mixed channel states, writes to
-CH3 in a coupled mode and the upper limit of a numeric combined write, the clamp of the
-ON/OFF delay writes, `MODE` on CH1/CH4, the other two models. Open questions:
+assumed), `OUTPut:TRACK` with an output on, `OUTPut:ALL?` with mixed channel states, whether
+an ignored write locks the panel, and the other two models. Open questions:
 `docs/scpi_reference.md` section 8.
 
 ## More

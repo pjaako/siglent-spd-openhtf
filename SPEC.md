@@ -175,25 +175,26 @@ Coupled modes (open question 21, verified on SPD4323X, firmware 4.1.2.9R1,
 2026-10-04, `docs/hardware_findings.md` run 2): a setpoint written to CH2 is the
 **combined** value (SERIES: `VOLTage CH2,20` reads back 20 on CH2 and 10 on
 CH3; PARALLEL: `CURRent CH2,5` reads back 5 on CH2 and 2.5 on CH3). While the
-cached track mode is SERIES or PARALLEL the plug therefore allows exactly two
-setpoint writes on CH2/CH3, with the usual read-back: the **voltage of CH2 in
-SERIES** and the **current of CH2 in PARALLEL**; their guard is the model's
-`series.voltage` (SERIES) or `parallel.current` (PARALLEL) rating. Every other
-voltage or current write on CH2 or CH3 in a coupled mode (CH3, the current of
-CH2 in SERIES, the voltage of CH2 in PARALLEL), whether through `set_voltage`,
-`set_current` or `configure_channel`, raises `RuntimeError` naming question 21
-before anything is sent: nobody has tried them on hardware. `configure_channel`
-checks its `voltage`/`current` items up front; OVP/OCP items are not affected.
-`restore()` restores the allowed quantity and skips the rest (reporting those items
-whose value differs), and leaves CH2 alone while CH3's output is on (CH3 follows
-CH2). The two writes are allowed only when `self.model` is known and `tested` (an
-unknown or untested model may read the value per half), and the track mode is read
+track mode is SERIES or PARALLEL the plug allows every voltage/current setpoint
+write on **CH2**, with the usual read-back: the **voltage in SERIES** and the
+**current in PARALLEL** are the combined value (guard: the model's `series.voltage`
+resp. `parallel.current` rating; the instrument itself limits them to 60 V resp.
+6.464 A), the **current in SERIES** and the **voltage in PARALLEL** are per
+channel (guard: the channel rating; in SERIES CH3 shows CH2's current + 0.1 A, in
+PARALLEL CH3 takes the voltage too). A voltage or current written to **CH3** in
+a coupled mode is ignored by the instrument (CH3 follows CH2), so `set_voltage`,
+`set_current` and `configure_channel` raise `RuntimeError` before anything is
+sent. `configure_channel` checks its `voltage`/`current` items up front; OVP/OCP
+items are not affected. `restore()` writes CH2 (both quantities) and leaves CH3
+to follow (a CH3 item is reported only if it still differs afterwards), and
+leaves CH2 alone while CH3's output is on. The CH2 writes are allowed only when
+`self.model` is known and `tested` (an unknown or untested model may behave
+differently), and the track mode is read
 fresh from the instrument (`OUTPut:TRACK?`, about 4 ms) before every CH2/CH3
 voltage or current write, because the cached mode can be stale (panel, second
 client); CH1 and CH4 setters never query it.
-Not yet tried (open): the upper limit of a numeric combined write (5 A was
-accepted in PARALLEL although `MAX` is 3.232 A; the `MAXimum` keyword stays
-per channel) and everything listed above as refused.
+The `MAXimum` keyword stays per channel (32.32 V, 3.232 A) in a coupled mode.
+Not yet tried (open): the other quantity of CH2 above the per-channel `MAX`.
 
 `max_voltage(ch)` / `max_current(ch)` query `:SOURce:VOLTage:SET? CHn,MAXimum` /
 `:SOURce:CURRent:SET? CHn,MAXimum` (verified) and return the float.
@@ -290,8 +291,7 @@ No `pyvisa` import. Constructor:
 - Clamping as observed: voltage/current clamp to **1.01 x rating** (`MAX`,
   e.g. 6.060000 / 32.320000 / 3.232000 on the SPD4323X) and to 0 below; OVP/OCP
   clamp to 0.1 x .. 1.1 x rating; OCP delay clamps to 0..3600 s; ON/OFF delays
-  the same (`# ASSUMPTION(hw): same as OCP:DELay`; writes of 0, 0.5 and 2 s were
-  accepted on hardware, the clamps were not tried). Nothing is ever reported, so
+  the same (verified). Nothing is ever reported, so
   a plug without read-back verification would silently pass. `MINimum`/`MAXimum`/
   `DEFault` (and `MIN`/`MAX`/`DEF`) work in set commands for V, I, OVP, OCP and
   delays (DEFault = 0 for V/I/delays, 1.1 x rating for OVP/OCP) and as query
@@ -306,7 +306,7 @@ No `pyvisa` import. Constructor:
   without separator.
 - A query that takes no channel but gets one (`OUTPut:TRACK? CH1`) gets no
   answer; a channel query without channel (`VOLTage?`) answers CH1
-  (`# ASSUMPTION(hw): CH1 or the panel-selected channel`).
+  (verified: CH1, also with CH2 selected on the panel).
 - Track change: entering SERIES/PARALLEL copies CH2's voltage and current
   setpoints to CH3 (kept after INDEPENDENT); store per-half values; in SERIES
   `VOLT? CH2` answers 2 x, in PARALLEL `CURR? CH2` answers 2 x; CH3 answers its
@@ -315,9 +315,11 @@ No `pyvisa` import. Constructor:
   value (verified): each half stores half of it and **CH3 follows CH2**; the
   `MAXimum`/`MINimum`/`DEFault` keywords are per channel and used as the combined
   value (32.32 V resp. 3.232 A for MAXimum, verified); a numeric value is
-  clamped to 0..2 x MAX (`# ASSUMPTION(hw)`: the upper limit was not tried, 5 A
-  above the 3.232 A MAX was accepted). Other writes in a coupled mode (CH3, the
-  other quantity of CH2) are stored per channel (not tried).
+  limited to the series rating (60 V) in SERIES and to 2 x MAX (6.464 A) in
+  PARALLEL (verified). The other quantity of CH2 is per channel (the voltage in
+  PARALLEL also lands on CH3; CH3's current in SERIES reads CH2's + 0.1 A, nothing
+  stored), clamped at the per-channel maximum (`# ASSUMPTION(hw)`: not tried
+  above it). Voltage and current writes to CH3 in a coupled mode are ignored.
 - OFF delay (verified, run 2, Q22): switching an output off with a non-zero OFF
   delay, by `OUTPut CHn,0` or `OUTPut:ALL 0`, keeps it on (`OUTPut?` answers 1,
   measurements unchanged) until the delay has elapsed (`advance()`); writing the
@@ -330,8 +332,8 @@ No `pyvisa` import. Constructor:
   (ignore the delay). If measured V > OVP, set `ovp_tripped` and turn the
   output off. `RESET:PROTect` clears both flags.
 - `OUTPut:TRACK <x>` accepts `0|1|2|INDEPENDENT|SERIES|PARALLEL`.
-  `MODE CH2|CH3,<0|1|2W|4W>`; `MODE? CH1` answers `0` (observed); `MODE? CH4`
-  and `MODE CH1|CH4,<x>` keep no answer / ignored (`# ASSUMPTION(hw): not tried`).
+  `MODE CH2|CH3,<0|1|2W|4W>`; `MODE? CH1` and `MODE? CH4` answer `0`
+  (observed) and `MODE CH1|CH4,<x>` is ignored (verified, run 2 addendum).
 - `reject: dict[str, str]`: header prefix -> if a write starts with it, ignore
   the write (state unchanged) so read-back verification catches it.
 - Helpers for tests: `set_load(ch, ohms)`, `trip_ovp(ch)`, `trip_ocp(ch)`.

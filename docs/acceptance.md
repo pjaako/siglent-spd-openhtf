@@ -226,6 +226,7 @@ question 9 and the unlock of question 12).
 | 19 | error_reporting | write | 6, 8 |
 | 20 | set_forms | write | 7 |
 | 21 | plug_write_smoke (outputs off; imports the plug) | write | 9, 12 |
+| 22 | followups (outputs off): coupled writes of CH3 and the other quantity of CH2, numeric limits, ON/OFF delay clamps, `MODE` on CH1/CH4, `VOLTage?` without channel (select CH2 on the panel first) | write | 21, 9, 8 |
 | 30 | output_settling (`--allow-output --confirm-no-load`) | output | 11 |
 | 31 | off_delay (`--allow-output --confirm-no-load`) | output | 11, 22 |
 
