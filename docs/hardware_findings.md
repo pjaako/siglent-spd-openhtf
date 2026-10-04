@@ -846,9 +846,9 @@ No trip was provoked (nothing connected, no deliberate OVP/OCP fault). `1` = tri
   (E15, E16), `LOCK` behaviour (E17), `*IDN?;*OPC?` now answered as one line `...4.1.2.9R11` by the fixed
   `Link.query` (acc 172-174 equivalent: no timeout), the `;` chains in E18.
 - The `LOCK?` after the `LOCK 0` write still takes 164-391 ms; irrelevant for the plug.
-- The owner heard key beeps on every remote write (the supply beeps on the first remote command after
-  idle); `SOUNd:KEY 0` switched that off. It is a convenience of the test bench, not something the plug
-  should do.
+- The owner found the beeping annoying and asked for it to be switched off (`SOUNd:KEY 0`, see the header
+  table). Whether the beeps came from remote writes or from keys was not established. It is a bench
+  convenience, not something the plug should do.
 
 ## Verdict on every remaining `ASSUMPTION(hw)` marker
 
