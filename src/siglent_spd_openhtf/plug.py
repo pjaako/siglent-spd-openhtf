@@ -708,31 +708,28 @@ class SiglentSpdPlug(BasePlug):  # type: ignore[misc]
     ) -> str | None:
         """Why a ``quantity`` ('voltage' or 'current') write on CH``ch`` is refused, or None.
 
-        verified on SPD4323X, firmware 4.1.2.9R1, 2026-10-04 (docs/hardware_findings.md run 2,
-        Q21): in SERIES the voltage written to CH2 is the combined voltage (read back unchanged
-        from CH2, CH3 follows with half), in PARALLEL the current written to CH2 is the combined
-        current. Nothing else was written in a coupled mode: a write to CH3, the current of CH2
-        in SERIES and the voltage of CH2 in PARALLEL are untested, so they stay refused (a wrong
-        guess would be applied to the terminals before the read-back could object). The two
-        verified writes are allowed only on a model with ``tested`` set (an unknown model or an
-        untested one may read the value per half).
+        verified on SPD4323X, firmware 4.1.2.9R1, 2026-10-04 (docs/hardware_findings.md run 2
+        and its addendum, Q21): in SERIES the voltage written to CH2 is the combined voltage
+        (CH2 reads it back, CH3 follows with half), in PARALLEL the current written to CH2 is
+        the combined current; the current of CH2 in SERIES and the voltage of CH2 in PARALLEL
+        are per channel and read back on CH2 as written. A voltage or current written to CH3
+        in a coupled mode is ignored by the instrument (CH3 follows CH2), so it is refused
+        before anything is sent. The CH2 writes are allowed only on a model with ``tested`` set
+        (an unknown or untested model may behave differently).
         """
         if ch not in (2, 3) or mode is TrackMode.INDEPENDENT:
             return None
-        if (
-            ch == 2
-            and model is not None
-            and model.tested
-            and (
-                (mode is TrackMode.SERIES and quantity == 'voltage')
-                or (mode is TrackMode.PARALLEL and quantity == 'current')
-            )
-        ):
+        if ch == 2 and model is not None and model.tested:
             return None
+        if ch == 3:
+            return (
+                f'refusing to write the {quantity} setpoint of CH3 while the track mode is '
+                f'{mode.value}: CH3 follows CH2 and the instrument ignores the write '
+                '(write to CH2 instead; open question 21)'
+            )
         return (
-            f'refusing to write the {quantity} setpoint of CH{ch} while the track mode is '
-            f'{mode.value}: only the CH2 voltage in SERIES and the CH2 current in PARALLEL '
-            'on a model tested on hardware (the SPD4323X) are allowed (open question 21)'
+            f'refusing to write the {quantity} setpoint of CH2 while the track mode is '
+            f'{mode.value}: its meaning is verified on the SPD4323X only (open question 21)'
         )
 
     def _fresh_track(self, ch: int) -> TrackMode | None:
@@ -1010,6 +1007,23 @@ class SiglentSpdPlug(BasePlug):  # type: ignore[misc]
             self.logger.warning('set_track: cannot read the CH3 setpoints: %s', exc)
             return None
 
+    @staticmethod
+    def _series_offset_only(
+        before: tuple[float, float],
+        after: tuple[float, float],
+        modes: tuple[TrackMode | None, TrackMode],
+    ) -> bool:
+        """True if CH3 only shows its SERIES display offset: the current reads 0.1 A above CH2's.
+
+        verified on SPD4323X, firmware 4.1.2.9R1, 2026-10-04 (docs/hardware_findings.md run 2
+        addendum, Q21): in SERIES ``CURRent? CH3`` answers CH2's current plus 0.1 A (3 A ->
+        3.1 A, 2 A -> 2.1 A); the stored value is unchanged, so the step into or out of SERIES
+        is no change of the CH3 setpoint. An unknown previous mode counts as possibly SERIES.
+        """
+        if TrackMode.SERIES not in modes and None not in modes:
+            return False
+        return before[0] == after[0] and math.isclose(abs(before[1] - after[1]), 0.1, abs_tol=1e-3)
+
     def set_track(self, mode: TrackMode) -> None:
         """Select independent, series or parallel mode of CH2/CH3.
 
@@ -1024,12 +1038,19 @@ class SiglentSpdPlug(BasePlug):  # type: ignore[misc]
             if self.output(n):
                 raise RuntimeError(f'refusing to change the track mode while CH{n} output is on')
         before = self._ch3_setpoints()
+        previous = self._track
         self._track = None  # the cached value is untrusted until the read-back succeeds
         self.write_verified(
             _Scpi.track(wanted.value), _Scpi.TRACK_QUERY, wanted, parse=_parse_track
         )
         self._track = wanted
         after = self._ch3_setpoints()
+        if (
+            before is not None
+            and after is not None
+            and self._series_offset_only(before, after, (previous, wanted))
+        ):
+            after = before
         if before is not None and after is not None and before != after:
             self.logger.warning(
                 'set_track(%s): the CH3 setpoints changed from %g V / %g A to %g V / %g A '

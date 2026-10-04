@@ -1946,6 +1946,153 @@ def exp_plug_write_smoke(c: Ctx) -> None:
     )
 
 
+def _probe_writes(
+    c: Ctx, rows: list[tuple[str, list[tuple[str, str | None]]]], cmd: str, queries: list[str]
+) -> None:
+    """Write `cmd`, then query every entry of `queries`; keep (cmd, [(query, reply)]) in `rows`."""
+    c.w(cmd)
+    rows.append((cmd, [(q, c.q(q)) for q in queries]))
+
+
+def _rows_block(rows: list[tuple[str, list[tuple[str, str | None]]]]) -> str:
+    return '| write | read-back |\n|---|---|\n' + '\n'.join(
+        '| `%s` | %s |' % (cmd, '; '.join('`%s` -> `%s`' % qr for qr in reads))
+        for cmd, reads in rows
+    )
+
+
+@experiment(22, 'followups', WRITE, (21, 9, 8))
+def exp_followups(c: Ctx) -> None:
+    """Run-2 leftovers, outputs off: coupled writes not yet tried, delay clamps, MODE on CH1/CH4, `VOLTage?` without channel.
+
+    Open question 21 (what a CH3 write, the current of CH2 in SERIES, the voltage of CH2 in
+    PARALLEL and a numeric combined value above `MAX` do), 9 (do the ON/OFF delay writes clamp
+    like `OCP:DELay`), 8 (does `VOLTage?` without a channel answer CH1 or the panel-selected
+    channel: ask the owner to select CH2 on the panel before the run; does `MODE` accept
+    CH1/CH4). Runs only while ALL outputs are off (enforced) and the track mode is INDEPENDENT.
+    CH2/CH3 setpoints, the delays of the channel, MODE of CH1/CH4 and the track mode are
+    restored with read-back.
+    """
+    c.strict_outputs_off()
+    orig = c.q('OUTPut:TRACK?')
+    if orig is None or orig.strip().upper() not in ('0', 'INDEPENDENT'):
+        raise Skip('needs the track mode INDEPENDENT; it reads %r' % orig)
+    n = c.ch
+    # --- 1. `VOLTage?` without a channel, before any write (a write could move the panel selection)
+    bare = {'VOLTage?': c.q('VOLTage?'), 'CURRent?': c.q('CURRent?')}
+    per_ch = {k: [c.q('%s CH%d' % (k, m)) for m in (1, 2, 3, 4)] for k in ('VOLTage?', 'CURRent?')}
+    c.finding(
+        8,
+        '`VOLTage?` -> %r and `CURRent?` -> %r without a channel; CH1..CH4 voltage %s, current %s. '
+        'Compare with the channel the panel has selected (ask the owner)'
+        % (bare['VOLTage?'], bare['CURRent?'], per_ch['VOLTage?'], per_ch['CURRent?']),
+    )
+    # --- 2. MODE on CH1 and CH4 (the manual lists CH2 and CH3 only)
+    mode_orig = {m: c.probe('MODE? CH%d' % m) for m in (1, 4)}
+    mode_rows: list[tuple[str, list[tuple[str, str | None]]]] = []
+    # --- 3. ON/OFF delay clamps
+    delay_orig = {k: c.q('OUTPut:%s:DELay? CH%d' % (k, n)) for k in ('ON', 'OFF')}
+    delay_rows: list[tuple[str, list[tuple[str, str | None]]]] = []
+    # --- 4. coupled writes
+    rows: dict[str, list[tuple[str, list[tuple[str, str | None]]]]] = {'SERIES': [], 'PARALLEL': []}
+    state: dict[str, dict[str, str | None]] = {}
+    try:
+        for m in (1, 4):
+            for cmd in ('MODE CH%d,1' % m, 'MODE CH%d,0' % m):
+                c.w(cmd)
+                mode_rows.append((cmd, [('MODE? CH%d' % m, c.probe('MODE? CH%d' % m))]))
+        for kind in ('ON', 'OFF'):
+            for v in ('3601', '-1', 'MAXimum', 'MINimum', 'DEFault', '0'):
+                _probe_writes(
+                    c,
+                    delay_rows,
+                    'OUTPut:%s:DELay CH%d,%s' % (kind, n, v),
+                    ['OUTPut:%s:DELay? CH%d' % (kind, n)],
+                )
+        v2 = [':SOURce:VOLTage:SET? CH2', ':SOURce:VOLTage:SET? CH3']
+        i2 = [':SOURce:CURRent:SET? CH2', ':SOURce:CURRent:SET? CH3']
+        plan = {
+            'SERIES': [
+                (':SOURce:VOLTage:SET CH2,40', v2),
+                (':SOURce:VOLTage:SET CH2,70', v2),
+                (':SOURce:VOLTage:SET CH2,200', v2),
+                (':SOURce:CURRent:SET CH2,2', i2),
+                (':SOURce:VOLTage:SET CH3,6', v2),
+                (':SOURce:CURRent:SET CH3,1.5', i2),
+            ],
+            'PARALLEL': [
+                (':SOURce:CURRent:SET CH2,7', i2),
+                (':SOURce:CURRent:SET CH2,20', i2),
+                (':SOURce:VOLTage:SET CH2,10', v2),
+                (':SOURce:VOLTage:SET CH3,8', v2),
+                (':SOURce:CURRent:SET CH3,1', i2),
+            ],
+        }
+        for mode, steps in plan.items():
+            track = c.setq('OUTPut:TRACK %s' % mode, 'OUTPut:TRACK?')
+            state[mode] = _read_coupled(c)
+            c.note(
+                '%s: track reads %r; before the writes: %s' % (mode, track, _fmt_state(state[mode]))
+            )
+            for cmd, queries in steps:
+                _probe_writes(c, rows[mode], cmd, queries)
+            c.note('%s: after the writes: %s' % (mode, _fmt_state(_read_coupled(c))))
+    finally:
+        try:
+            c.w('OUTPut:TRACK INDEPENDENT')
+            c.note('track back to INDEPENDENT, reads %r' % c.q('OUTPut:TRACK?'))
+            if c.snapshot:
+                items = restore_snapshot(
+                    c,
+                    c.snapshot,
+                    [2, 3],
+                    include=lambda i: (
+                        i.name.split()[-1] in ('voltage', 'current', 'ovp', 'ocp')
+                        and i.name.startswith(('CH2', 'CH3'))
+                    ),
+                )
+                items += restore_snapshot(
+                    c,
+                    c.snapshot,
+                    [n],
+                    include=lambda i: i.name in ('CH%d on_delay' % n, 'CH%d off_delay' % n),
+                )
+                bad = [i for i in items if i.status == 'FAILED']
+                c.note(
+                    'local restore of CH2/CH3 setpoints, OVP, OCP and the delays of CH%d: '
+                    '%d items, FAILED: %s'
+                    % (n, len(items), [(i.name, i.orig, i.now) for i in bad] or 'none')
+                )
+        except Exception as exc:  # pragma: no cover - the global restore reports it again
+            c.note('local restore failed: %s' % exc)
+        for m, original in mode_orig.items():
+            if original is not None:
+                try:
+                    c.w('MODE CH%d,%s' % (m, original))
+                    c.note(
+                        'MODE CH%d restored: now %r (wanted %r)'
+                        % (m, c.probe('MODE? CH%d' % m), original)
+                    )
+                except Exception as exc:  # pragma: no cover
+                    c.note('MODE CH%d restore failed: %s' % (m, exc))
+    c.finding(21, 'coupled writes not tried before, SERIES: %s' % _fmt_rows(rows['SERIES']))
+    c.finding(21, 'coupled writes not tried before, PARALLEL: %s' % _fmt_rows(rows['PARALLEL']))
+    c.finding(
+        9, 'ON/OFF delay writes on CH%d (originals %s): %s' % (n, delay_orig, _fmt_rows(delay_rows))
+    )
+    c.finding(8, 'MODE on CH1/CH4 (originals %s): %s' % (mode_orig, _fmt_rows(mode_rows)))
+    for mode in ('SERIES', 'PARALLEL'):
+        c.block('%s\n\n%s' % (mode, _rows_block(rows[mode])))
+    c.block('ON/OFF delay clamps\n\n%s' % _rows_block(delay_rows))
+    c.block('MODE on CH1/CH4\n\n%s' % _rows_block(mode_rows))
+
+
+def _fmt_rows(rows: list[tuple[str, list[tuple[str, str | None]]]]) -> str:
+    return '; '.join(
+        '`%s` -> %s' % (cmd, ', '.join('%r' % r for _, r in reads)) for cmd, reads in rows
+    )
+
+
 # ---------------------------------------------------------------------------
 # Experiment: output on (opt-in)
 # ---------------------------------------------------------------------------

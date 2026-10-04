@@ -381,24 +381,79 @@ def test_coupled_keywords_are_combined_too() -> None:
 
 
 def test_a_numeric_combined_write_may_exceed_the_per_channel_max() -> None:
-    # verified: 5 A written to CH2 in PARALLEL read back 5 A (docs/hardware_findings.md run 2);
-    # ASSUMPTION(hw): the numeric limit is twice MAX, which was not tried.
+    # verified (run 2 and its addendum, Q21): 5 A written to CH2 in PARALLEL read back 5 A,
+    # 7 A and 20 A read back 6.464 A (twice MAX)
     fake = FakeSpdResource()
     fake.write('OUTPut:TRACK PARALLEL')
     fake.write('CURRent CH2,5')
     assert fake.query('CURRent? CH2') == '5.000000'
-    fake.write('CURRent CH2,9')
-    assert fake.query('CURRent? CH2') == '6.464000'
-    assert fake.query('CURRent? CH3') == '3.232000'
+    for value in ('7', '20'):
+        fake.write(f'CURRent CH2,{value}')
+        assert fake.query('CURRent? CH2') == '6.464000'
+        assert fake.query('CURRent? CH3') == '3.232000'
 
 
-def test_the_uncoupled_quantity_of_ch2_is_stored_per_channel() -> None:
-    # not tried on hardware: the current of CH2 in SERIES, the voltage of CH2 in PARALLEL
+def test_the_combined_voltage_in_series_is_limited_to_the_series_rating() -> None:
+    # verified (run 2 addendum, Q21): 40 V accepted, 70 V and 200 V read back 60 V, CH3 30 V
+    fake = FakeSpdResource()
+    fake.write('OUTPut:TRACK SERIES')
+    fake.write(':SOURce:VOLTage:SET CH2,40')
+    assert (fake.query('VOLTage? CH2'), fake.query('VOLTage? CH3')) == ('40.000000', '20.000000')
+    for value in ('70', '200'):
+        fake.write(f':SOURce:VOLTage:SET CH2,{value}')
+        assert (fake.query('VOLTage? CH2'), fake.query('VOLTage? CH3')) == (
+            '60.000000',
+            '30.000000',
+        )
+
+
+def test_ch3_writes_are_ignored_in_a_coupled_mode() -> None:
+    # verified (run 2 addendum, Q21): neither CH2 nor CH3 changed
+    fake = FakeSpdResource()
+    fake.write('OUTPut:TRACK SERIES')
+    fake.write('VOLTage CH2,40')
+    fake.write('CURRent CH2,2')
+    fake.write('VOLTage CH3,6')
+    fake.write('CURRent CH3,1.5')
+    assert (fake.query('VOLTage? CH2'), fake.query('VOLTage? CH3')) == ('40.000000', '20.000000')
+    assert (fake.query('CURRent? CH2'), fake.query('CURRent? CH3')) == ('2.000000', '2.100000')
+    fake.write('OUTPut:TRACK PARALLEL')
+    fake.write('VOLTage CH3,8')
+    fake.write('CURRent CH3,1')
+    assert (fake.query('VOLTage? CH2'), fake.query('VOLTage? CH3')) == ('20.000000', '20.000000')
+    assert (fake.query('CURRent? CH2'), fake.query('CURRent? CH3')) == ('4.000000', '2.000000')
+    fake.write('OUTPut:TRACK INDEPENDENT')
+    fake.write('VOLTage CH3,8')  # a write works again when the channels are independent
+    assert fake.query('VOLTage? CH3') == '8.000000'
+
+
+def test_the_other_quantity_of_ch2_in_a_coupled_mode() -> None:
+    # verified (run 2 addendum, Q21): the current of CH2 in SERIES is per channel, CH3 shows it
+    # plus 0.1 A; the voltage of CH2 in PARALLEL is per channel and CH3 takes it too
     fake = FakeSpdResource()
     fake.write('OUTPut:TRACK SERIES')
     fake.write('CURRent CH2,2')
-    assert fake.channels[2].current == 2.0
-    assert fake.channels[3].current == 0.0
+    assert (fake.query('CURRent? CH2'), fake.query('CURRent? CH3')) == ('2.000000', '2.100000')
+    assert fake.channels[3].current == 0.0  # the 0.1 A is a display offset, nothing is stored
+    fake.write('OUTPut:TRACK PARALLEL')
+    assert (fake.query('CURRent? CH2'), fake.query('CURRent? CH3')) == ('4.000000', '2.000000')
+    fake.write('VOLTage CH2,10')
+    assert (fake.query('VOLTage? CH2'), fake.query('VOLTage? CH3')) == ('10.000000', '10.000000')
+
+
+def test_on_and_off_delay_writes_clamp_like_the_ocp_delay() -> None:
+    # verified (run 2 addendum, Q9)
+    fake = FakeSpdResource()
+    for kind in ('ON', 'OFF'):
+        for value, wanted in (
+            ('3601', '3600.000000'),
+            ('-1', '0.000000'),
+            ('MAXimum', '3600.000000'),
+            ('MINimum', '0.000000'),
+            ('DEFault', '0.000000'),
+        ):
+            fake.write(f'OUTPut:{kind}:DELay CH1,{value}')
+            assert fake.query(f'OUTPut:{kind}:DELay? CH1') == wanted
 
 
 def test_setting_the_off_delay_to_zero_switches_a_pending_output_off_at_once() -> None:
@@ -434,8 +489,10 @@ def test_entering_a_coupled_mode_copies_ch2_setpoints_to_ch3_for_good() -> None:
         fake.write(command)
     fake.write('OVP CH3,20')
     fake.write('OUTPut:TRACK SERIES')
-    assert (fake.query('VOLTage? CH3'), fake.query('CURRent? CH3')) == ('14.000000', '3.000000')
+    # verified (run 2 addendum): in SERIES CH3 shows CH2's current plus 0.1 A, stored unchanged
+    assert (fake.query('VOLTage? CH3'), fake.query('CURRent? CH3')) == ('14.000000', '3.100000')
     fake.write('OUTPut:TRACK PARALLEL')
+    assert fake.query('CURRent? CH3') == '3.000000'
     fake.write('OUTPut:TRACK INDEPENDENT')
     assert (fake.query('VOLTage? CH3'), fake.query('CURRent? CH3')) == ('14.000000', '3.000000')
     assert fake.query('OVP? CH3') == '20.000000'  # OVP and OCP are not changed
@@ -619,11 +676,11 @@ def test_sense_on_ch2_and_ch3_only() -> None:
     fake.write('MODE CH2,2W')
     assert fake.query('MODE? CH2') == '0'
     fake.write('MODE CH1,4W')
-    fake.write('MODE CH4,4W')
-    assert fake.query('MODE? CH1') == '0'  # verified: the supply answers 0 for CH1
-    assert fake.sense == {2: 0, 3: 1}  # ASSUMPTION(hw): CH1/CH4 writes are ignored (not tried)
-    with pytest.raises(FakeTimeout):
-        fake.query('MODE? CH4')  # ASSUMPTION(hw): not tried
+    fake.write('MODE CH4,1')
+    # verified (run 2 addendum, Q8): MODE? answers 0 for CH1 and CH4, the writes are ignored
+    assert fake.query('MODE? CH1') == '0'
+    assert fake.query('MODE? CH4') == '0'
+    assert fake.sense == {2: 0, 3: 1}
 
 
 def test_lock_and_delays() -> None:

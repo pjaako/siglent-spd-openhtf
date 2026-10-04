@@ -302,17 +302,19 @@ class FakeSpdResource:
             return low * rating.voltage, high * rating.voltage, high * rating.voltage
         if keys == ('OCP',):
             return low * rating.current, high * rating.current, high * rating.current
-        # ASSUMPTION(hw): same as OCP:DELay. The ON and OFF delay writes accepted 0, 0.5 and 2 s
-        # on hardware (docs/hardware_findings.md run 2) but their clamping was not tried; they
-        # are assumed to clamp to the same 0..3600 s as OCP:DELay.
+        # verified on SPD4323X, firmware 4.1.2.9R1, 2026-10-04 (docs/hardware_findings.md run 2
+        # addendum, Q9): the ON and OFF delay writes clamp like OCP:DELay, 3601 -> 3600,
+        # -1 -> 0, MAXimum 3600, MINimum and DEFault 0.
         return 0.0, _MAX_DELAY_S, 0.0
 
     def _combined(self, ch: int) -> tuple[float, float]:
         """Voltage and current setpoint as CH<ch> reports them.
 
         In SERIES CH2 reports the combined voltage (2 x the stored per-half value), in
-        PARALLEL the combined current; CH3 always answers its own stored value
-        (docs/hardware_findings.md Q21, read side).
+        PARALLEL the combined current; CH3 answers its own stored value, except its current
+        in SERIES, which reads 0.1 A above CH2's (3 A -> 3.1 A, 2 A -> 2.1 A, verified on
+        SPD4323X, firmware 4.1.2.9R1, 2026-10-04, docs/hardware_findings.md run 2 and its
+        addendum, Q21).
         """
         state = self.channels[ch]
         volts, amps = state.voltage, state.current
@@ -320,6 +322,8 @@ class FakeSpdResource:
             volts *= 2
         elif ch == 2 and self.track == 2:
             amps *= 2
+        elif ch == 3 and self.track == 1:
+            amps = to_float32(self.channels[2].current + 0.1)
         return volts, amps
 
     def _measure(self, ch: int) -> tuple[float, float, str]:
@@ -436,8 +440,9 @@ class FakeSpdResource:
             state.ocp_tripped = False
             return True
         if keys == ('MODE',):
-            # ASSUMPTION(hw): not tried. MODE on CH1 and CH4 is ignored; the manual limits it
-            # to CH2 and CH3 and a write to CH1/CH4 was never sent.
+            # verified on SPD4323X, firmware 4.1.2.9R1, 2026-10-04 (docs/hardware_findings.md run 2
+            # addendum, Q8): MODE CH1,1 and MODE CH4,1 are ignored, the query keeps answering 0.
+            # ASSUMPTION(hw): whether an ignored MODE write still sets LOCK is not known.
             if ch not in self.sense or value_arg is None:
                 return False
             sense = _SENSE_WORDS.get(value_arg.upper(), self._number(value_arg))
@@ -456,6 +461,12 @@ class FakeSpdResource:
             return True
         field = _SCALAR_FIELDS.get(keys)
         if field is None or value_arg is None:
+            return False
+        if ch == 3 and self.track != 0 and keys in (('VOLT',), ('CURR',)):
+            # verified on SPD4323X, firmware 4.1.2.9R1, 2026-10-04 (docs/hardware_findings.md
+            # run 2 addendum, Q21): CH3 follows CH2 in SERIES and PARALLEL, a voltage or
+            # current written to CH3 is ignored (read-back unchanged on both channels).
+            # ASSUMPTION(hw): whether such an ignored write still sets LOCK is not known.
             return False
         low, high, default = self._limits(keys, ch)
         word = value_arg.strip().upper()
@@ -476,11 +487,16 @@ class FakeSpdResource:
         # verified on SPD4323X, firmware 4.1.2.9R1, 2026-10-05 (docs/hardware_findings.md Q9):
         # out-of-range values are clamped silently, never rejected or reported.
         if coupled and not keyword:
-            # ASSUMPTION(hw): numeric upper clamp of a combined write. 5 A written to CH2 in
-            # PARALLEL was accepted (above the 3.232 A per-channel MAX), so the combined value
-            # may exceed MAX; twice MAX is assumed as the limit, which was not tried.
-            number = min(max(number, low), 2 * high)
+            # verified on SPD4323X, firmware 4.1.2.9R1, 2026-10-04 (docs/hardware_findings.md
+            # run 2 addendum, Q21): a numeric combined value is limited to the series rating
+            # in SERIES (70 V and 200 V read back 60 V, 40 V was accepted) and to twice MAX in
+            # PARALLEL (7 A and 20 A read back 6.464 A, 5 A was accepted).
+            ceiling = self._spec.series.voltage if keys == ('VOLT',) else 2 * high
+            number = min(max(number, low), ceiling)
         else:
+            # ASSUMPTION(hw): the other quantity of CH2 in a coupled mode (the current in
+            # SERIES, the voltage in PARALLEL) is assumed to clamp at the per-channel maximum;
+            # values above it were not tried.
             number = min(max(number, low), high)
         if coupled:
             # verified on SPD4323X, firmware 4.1.2.9R1, 2026-10-04 (docs/hardware_findings.md
@@ -489,11 +505,13 @@ class FakeSpdResource:
             # follows CH2. The MAXimum keyword is per channel (32.32 V resp. 3.232 A, taken as
             # the combined value); MINimum and DEFault are assumed to be combined as well
             # (ASSUMPTION(hw): not tried). Both halves keep the value after returning to
-            # INDEPENDENT.
-            # OVP and OCP stay per channel. Not tried: writes to CH3 in a coupled mode, the
-            # current of CH2 in SERIES and the voltage of CH2 in PARALLEL (stored per channel
-            # here).
+            # INDEPENDENT. OVP and OCP stay per channel.
             number /= 2
+            setattr(self.channels[3], field, to_float32(number))
+        elif ch == 2 and self.track == 2 and keys == ('VOLT',):
+            # verified (run 2 addendum, Q21): the voltage of CH2 in PARALLEL is per channel and
+            # CH3 takes it too (10 V written, both read 10 V). The current of CH2 in SERIES is
+            # stored on CH2 only; CH3 shows it plus 0.1 A (see _combined).
             setattr(self.channels[3], field, to_float32(number))
         setattr(state, field, to_float32(number))
         if keys == ('OUTP', 'OFF', 'DEL') and number == 0 and state.off_remaining is not None:
@@ -549,9 +567,9 @@ class FakeSpdResource:
         if args:
             ch = self._channel(args[0])
         else:
-            # ASSUMPTION(hw): CH1 or the panel-selected channel. 'VOLTage?' without a channel
-            # answered CH1's setpoint (docs/hardware_findings.md Q8); the plug never omits
-            # the channel.
+            # verified on SPD4323X, firmware 4.1.2.9R1, 2026-10-04 (docs/hardware_findings.md run 2
+            # addendum, Q8): 'VOLTage?' without a channel answers CH1's setpoint, also with CH2
+            # selected on the front panel. The plug never omits the channel.
             ch = 1
         if ch is None:
             raise FakeTimeout(f'no answer to {message!r}: invalid channel')
@@ -564,8 +582,9 @@ class FakeSpdResource:
                 # Q8): 'MODE? CH1' answers 0 although the manual limits MODE to CH2/CH3.
                 return '0'
             if ch not in self.sense:
-                # ASSUMPTION(hw): not tried. MODE? CH4 was never sent; no answer is assumed.
-                raise FakeTimeout(f'no answer to {message!r}: only CH1..CH3 answer MODE?')
+                # verified on SPD4323X, firmware 4.1.2.9R1, 2026-10-04 (docs/hardware_findings.md
+                # run 2 addendum, Q8): 'MODE? CH4' answers 0 like 'MODE? CH1'.
+                return '0'
             # verified on SPD4323X, firmware 4.1.2.9R1, 2026-10-05 (docs/hardware_findings.md
             # Q13): the query answers 0 for 2W and 1 for 4W.
             return str(self.sense[ch])

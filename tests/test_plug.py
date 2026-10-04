@@ -552,8 +552,8 @@ def test_a_stale_cached_track_mode_neither_widens_the_guard_nor_lets_a_write_thr
         plug.set_voltage(2, 40)
     assert not [c for c in _new(fake, start) if '?' not in c]
     fake.track = 2  # and the other way round: the instrument is in PARALLEL now
-    with pytest.raises(RuntimeError, match='question 21'):
-        plug.set_voltage(2, 5)
+    with pytest.raises(RuntimeError, match='CH3 follows CH2'):
+        plug.set_voltage(3, 5)
     assert not [c for c in _new(fake, start) if '?' not in c]
 
 
@@ -649,32 +649,52 @@ def test_guard_follows_a_return_to_independent_mode() -> None:
 # ---- coupled modes (open question 21) --------------------------------------------------------
 
 
-# (mode, channel, quantity) combinations that were never written on hardware
-_UNTESTED_COUPLED_WRITES = [
-    (TrackMode.SERIES, 2, 'current'),
-    (TrackMode.SERIES, 3, 'voltage'),
-    (TrackMode.SERIES, 3, 'current'),
-    (TrackMode.PARALLEL, 2, 'voltage'),
-    (TrackMode.PARALLEL, 3, 'voltage'),
-    (TrackMode.PARALLEL, 3, 'current'),
+# CH3 follows CH2 in a coupled mode and the instrument ignores writes to it
+_CH3_COUPLED_WRITES = [
+    (mode, quantity)
+    for mode in (TrackMode.SERIES, TrackMode.PARALLEL)
+    for quantity in ('voltage', 'current')
 ]
 
 
-@pytest.mark.parametrize(('mode', 'ch', 'quantity'), _UNTESTED_COUPLED_WRITES)
-def test_unverified_coupled_writes_are_refused_before_anything_is_sent(
-    mode: TrackMode, ch: int, quantity: str
+@pytest.mark.parametrize(('mode', 'quantity'), _CH3_COUPLED_WRITES)
+def test_ch3_writes_are_refused_in_a_coupled_mode_before_anything_is_sent(
+    mode: TrackMode, quantity: str
 ) -> None:
     plug, fake = _plug()
     plug.set_track(mode)
     start = len(fake.log)
     setter = plug.set_voltage if quantity == 'voltage' else plug.set_current
+    with pytest.raises(RuntimeError, match='CH3 follows CH2'):
+        setter(3, 1)
     with pytest.raises(RuntimeError, match='question 21'):
-        setter(ch, 1)
-    with pytest.raises(RuntimeError, match='question 21'):
-        plug.configure_channel(ch, ovp=10, **{quantity: 1})  # even with a harmless item first
+        plug.configure_channel(3, ovp=10, **{quantity: 1})  # even with a harmless item first
     assert not [c for c in _new(fake, start) if '?' not in c]  # nothing was sent
-    assert fake.channels[2].voltage == 0
+    assert fake.channels[3].voltage == 0
     assert fake.channels[3].current == 0
+
+
+@pytest.mark.parametrize(
+    ('mode', 'quantity', 'value'),
+    [
+        (TrackMode.SERIES, 'current', 2),
+        (TrackMode.PARALLEL, 'voltage', 10),
+    ],
+)
+def test_the_other_quantity_of_ch2_is_written_per_channel(
+    mode: TrackMode, quantity: str, value: float
+) -> None:
+    # verified on SPD4323X, firmware 4.1.2.9R1, 2026-10-04 (docs/hardware_findings.md run 2
+    # addendum, Q21): read back on CH2 as written
+    plug, fake = _plug()
+    plug.set_track(mode)
+    if quantity == 'current':
+        plug.set_current(2, value)
+        assert plug.current_setpoint(2) == value
+    else:
+        plug.set_voltage(2, value)
+        assert plug.voltage_setpoint(2) == value
+        assert plug.voltage_setpoint(3) == value  # CH3 takes it in PARALLEL
 
 
 def test_ch2_voltage_in_series_is_the_combined_value() -> None:
@@ -760,6 +780,8 @@ def test_the_refusal_applies_with_an_unknown_model_too() -> None:
     fake.model = 'SPD9999X'
     plug, _ = _plug(fake=fake)
     plug.set_track(TrackMode.SERIES)
+    with pytest.raises(RuntimeError, match='question 21'):
+        plug.set_voltage(2, 5)  # the CH2 write needs a tested model
     with pytest.raises(RuntimeError, match='question 21'):
         plug.set_voltage(3, 5)
 
@@ -1006,7 +1028,7 @@ def test_set_track_warns_when_ch3_setpoints_were_overwritten(
     plug.configure_channel(3, voltage=12, current=2)
     with caplog.at_level(logging.WARNING):
         plug.set_track(TrackMode.SERIES)
-    assert 'CH3 setpoints changed from 12 V / 2 A to 14 V / 3 A' in caplog.text
+    assert 'CH3 setpoints changed from 12 V / 2 A to 14 V / 3.1 A' in caplog.text  # SERIES +0.1 A
     assert (fake.channels[3].voltage, fake.channels[3].current) == (14, 3)
     caplog.clear()
     with caplog.at_level(logging.WARNING):
@@ -1302,14 +1324,11 @@ def test_restore_of_a_value_between_rating_and_instrument_maximum_is_reported() 
 
 
 @pytest.mark.parametrize('mode', [TrackMode.SERIES, TrackMode.PARALLEL])
-def test_restore_in_a_coupled_mode_writes_only_the_verified_ch2_quantity(
-    mode: TrackMode,
-) -> None:
+def test_restore_in_a_coupled_mode_writes_ch2_and_leaves_ch3_to_follow(mode: TrackMode) -> None:
     plug, fake = _plug()
     plug.set_track(mode)
     snap = plug.snapshot()
     snap['channels'][1]['voltage'] = 2.0
-    series = mode is TrackMode.SERIES
     snap['channels'][2]['voltage'] = 7.0
     snap['channels'][2]['current'] = 1.0
     snap['channels'][3]['voltage'] = 1.0
@@ -1319,26 +1338,21 @@ def test_restore_in_a_coupled_mode_writes_only_the_verified_ch2_quantity(
     with pytest.raises(RuntimeError) as err:
         plug.restore(snap)
     message = str(err.value)
-    skipped_ch2 = 'CH2 current' if series else 'CH2 voltage'
-    restored_ch2 = 'CH2 voltage' if series else 'CH2 current'
-    assert skipped_ch2 in message
-    assert restored_ch2 not in message
+    # CH3 differs from the snapshot after CH2 was restored (it follows CH2): reported, not written
     assert 'CH3 voltage' in message
     assert 'CH3 current' in message
+    assert 'CH2' not in message
     assert 'question 21' in message
     writes = [c for c in _new(fake, start) if '?' not in c]
     assert ':SOURce:VOLTage:SET CH1,2' in writes  # CH1 is restored
     assert ':SOURce:OVP CH3,20' in writes  # so are the protection values of CH3
-    wanted = ':SOURce:VOLTage:SET CH2,7' if series else ':SOURce:CURRent:SET CH2,1'
-    assert wanted in writes  # the verified combined quantity of CH2
+    assert ':SOURce:VOLTage:SET CH2,7' in writes  # CH2 voltage and current, both verified
+    assert ':SOURce:CURRent:SET CH2,1' in writes
     assert not [
-        c
-        for c in writes
-        if c.startswith((':SOURce:VOLTage:SET CH3', ':SOURce:CURRent:SET CH3'))
-        or c.startswith(':SOURce:CURRent:SET CH2' if series else ':SOURce:VOLTage:SET CH2')
+        c for c in writes if c.startswith((':SOURce:VOLTage:SET CH3', ':SOURce:CURRent:SET CH3'))
     ]
-    assert fake.channels[2].voltage == (3.5 if series else 0)
-    assert fake.channels[2].current == (0 if series else 0.5)
+    assert plug.voltage_setpoint(2) == 7
+    assert plug.current_setpoint(2) == 1
 
 
 def test_restore_in_a_coupled_mode_reports_only_items_that_differ() -> None:
