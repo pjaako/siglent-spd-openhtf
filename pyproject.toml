@@ -1,0 +1,48 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "siglent-spd-openhtf"
+version = "0.1.0"
+description = "OpenHTF plug for Siglent SPD4000X programmable DC power supplies (target: SPD4323X, hardware acceptance pending)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "openhtf>=1.6.1",
+    "pyvisa>=1.14",
+    "pyvisa-py>=0.7",
+]
+
+[project.optional-dependencies]
+usb = ["pyusb"]
+dev = ["pytest", "ruff", "mypy"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/siglent_spd_openhtf"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+# ruff 0.16 also formats code blocks in Markdown; SPEC.md and docs/ are not ours to reformat
+extend-exclude = ["*.md", "docs"]
+
+[tool.ruff.format]
+quote-style = "single"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+strict = true
+files = ["src"]
+python_version = "3.11"
+
+[[tool.mypy.overrides]]
+module = ["openhtf", "openhtf.*", "pyvisa", "pyvisa.*"]
+ignore_missing_imports = true

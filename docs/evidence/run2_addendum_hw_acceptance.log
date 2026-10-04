@@ -1,0 +1,270 @@
+
+===== hw_acceptance 2026-10-04T22:35:29 =====
+22:35:29.835 Q  '*IDN?'                                  -> b'Siglent Technologies,SPD4323X,SPD43XXXXXXXXX,4.1.2.9R1\n'     6.2 ms
+22:35:29.837 Q  'OUTPut? CH1'                            -> b'0\n'                                 2.1 ms
+22:35:29.840 Q  'OUTPut? CH2'                            -> b'0\n'                                 2.5 ms
+22:35:29.842 Q  'OUTPut? CH3'                            -> b'0\n'                                 2.4 ms
+22:35:29.845 Q  'OUTPut? CH4'                            -> b'0\n'                                 2.2 ms
+22:35:29.850 Q  'OUTPut:ALL?'                            -> b'0\n'                                 5.2 ms
+22:35:29.854 Q  'VOLTage? CH1'                           -> b'5.000000\n'                          3.5 ms
+22:35:29.858 Q  'CURRent? CH1'                           -> b'2.000000\n'                          3.5 ms
+22:35:29.860 Q  'OVP? CH1'                               -> b'6.600000\n'                          2.0 ms
+22:35:29.863 Q  'OCP? CH1'                               -> b'3.520000\n'                          2.2 ms
+22:35:29.865 Q  'OCP:STATe? CH1'                         -> b'0\n'                                 2.4 ms
+22:35:29.868 Q  'OCP:DELay? CH1'                         -> b'0.000000\n'                          2.3 ms
+22:35:29.873 Q  'OUTPut:ON:DELay? CH1'                   -> b'0.000000\n'                          5.5 ms
+22:35:29.878 Q  'OUTPut:OFF:DELay? CH1'                  -> b'0.000000\n'                          5.2 ms
+22:35:29.881 Q  'OUTPut? CH1'                            -> b'0\n'                                 2.8 ms
+22:35:29.884 Q  'VOLTage? CH2'                           -> b'14.000000\n'                         2.4 ms
+22:35:29.887 Q  'CURRent? CH2'                           -> b'3.000000\n'                          2.3 ms
+22:35:29.889 Q  'OVP? CH2'                               -> b'35.200001\n'                         2.5 ms
+22:35:29.893 Q  'OCP? CH2'                               -> b'3.520000\n'                          3.6 ms
+22:35:29.898 Q  'OCP:STATe? CH2'                         -> b'0\n'                                 4.8 ms
+22:35:29.902 Q  'OCP:DELay? CH2'                         -> b'0.000000\n'                          4.0 ms
+22:35:29.905 Q  'OUTPut:ON:DELay? CH2'                   -> b'0.000000\n'                          2.6 ms
+22:35:29.907 Q  'OUTPut:OFF:DELay? CH2'                  -> b'0.000000\n'                          2.4 ms
+22:35:29.910 Q  'OUTPut? CH2'                            -> b'0\n'                                 2.5 ms
+22:35:29.912 Q  'VOLTage? CH3'                           -> b'12.000000\n'                         2.1 ms
+22:35:29.916 Q  'CURRent? CH3'                           -> b'2.000000\n'                          3.4 ms
+22:35:29.919 Q  'OVP? CH3'                               -> b'35.200001\n'                         3.3 ms
+22:35:29.924 Q  'OCP? CH3'                               -> b'3.520000\n'                          5.0 ms
+22:35:29.928 Q  'OCP:STATe? CH3'                         -> b'0\n'                                 4.3 ms
+22:35:29.932 Q  'OCP:DELay? CH3'                         -> b'0.000000\n'                          2.9 ms
+22:35:29.938 Q  'OUTPut:ON:DELay? CH3'                   -> b'0.000000\n'                          6.3 ms
+22:35:29.944 Q  'OUTPut:OFF:DELay? CH3'                  -> b'0.000000\n'                          5.8 ms
+22:35:29.949 Q  'OUTPut? CH3'                            -> b'0\n'                                 4.6 ms
+22:35:29.952 Q  'VOLTage? CH4'                           -> b'0.000000\n'                          2.6 ms
+22:35:29.955 Q  'CURRent? CH4'                           -> b'0.000000\n'                          3.5 ms
+22:35:29.959 Q  'OVP? CH4'                               -> b'6.600000\n'                          3.2 ms
+22:35:29.962 Q  'OCP? CH4'                               -> b'3.520000\n'                          3.8 ms
+22:35:29.965 Q  'OCP:STATe? CH4'                         -> b'0\n'                                 2.5 ms
+22:35:29.968 Q  'OCP:DELay? CH4'                         -> b'0.000000\n'                          2.3 ms
+22:35:29.972 Q  'OUTPut:ON:DELay? CH4'                   -> b'0.000000\n'                          4.1 ms
+22:35:29.977 Q  'OUTPut:OFF:DELay? CH4'                  -> b'0.000000\n'                          4.4 ms
+22:35:29.981 Q  'OUTPut? CH4'                            -> b'0\n'                                 4.5 ms
+22:35:29.984 Q  'OUTPut:TRACK?'                          -> b'0\n'                                 2.6 ms
+22:35:29.989 Q  'MODE? CH2'                              -> b'0\n'                                 4.8 ms
+22:35:29.993 Q  'MODE? CH3'                              -> b'0\n'                                 4.1 ms
+22:35:30.082 Q  'LOCK?'                                  -> b'0\n'                                88.8 ms
+22:35:30.086 Q  'OUTPut? CH1'                            -> b'0\n'                                 2.2 ms
+22:35:30.089 Q  'OUTPut? CH2'                            -> b'0\n'                                 2.4 ms
+22:35:30.091 Q  'OUTPut? CH3'                            -> b'0\n'                                 2.2 ms
+22:35:30.095 Q  'OUTPut? CH4'                            -> b'0\n'                                 3.5 ms
+22:35:30.100 Q  'OUTPut:TRACK?'                          -> b'0\n'                                 5.2 ms
+22:35:30.105 Q  'VOLTage?'                               -> b'5.000000\n'                          5.0 ms
+22:35:30.108 Q  'CURRent?'                               -> b'2.000000\n'                          2.4 ms
+22:35:30.110 Q  'VOLTage? CH1'                           -> b'5.000000\n'                          2.1 ms
+22:35:30.112 Q  'VOLTage? CH2'                           -> b'14.000000\n'                         2.0 ms
+22:35:30.115 Q  'VOLTage? CH3'                           -> b'12.000000\n'                         1.9 ms
+22:35:30.118 Q  'VOLTage? CH4'                           -> b'0.000000\n'                          3.4 ms
+22:35:30.122 Q  'CURRent? CH1'                           -> b'2.000000\n'                          3.5 ms
+22:35:30.125 Q  'CURRent? CH2'                           -> b'3.000000\n'                          3.1 ms
+22:35:30.129 Q  'CURRent? CH3'                           -> b'2.000000\n'                          4.0 ms
+22:35:30.131 Q  'CURRent? CH4'                           -> b'0.000000\n'                          1.7 ms
+22:35:30.133 Q  'MODE? CH1'                              -> b'0\n'                                 1.9 ms
+22:35:30.135 Q  'MODE? CH4'                              -> b'0\n'                                 2.0 ms
+22:35:30.137 Q  'OUTPut:ON:DELay? CH1'                   -> b'0.000000\n'                          2.2 ms
+22:35:30.143 Q  'OUTPut:OFF:DELay? CH1'                  -> b'0.000000\n'                          5.1 ms
+22:35:30.143 W  'MODE CH1,1'                                 0.0 ms
+22:35:30.192 Q  'MODE? CH1'                              -> b'0\n'                                49.2 ms
+22:35:30.193 W  'MODE CH1,0'                                 0.1 ms
+22:35:30.454 Q  'MODE? CH1'                              -> b'0\n'                               260.7 ms
+22:35:30.454 W  'MODE CH4,1'                                 0.1 ms
+22:35:30.786 Q  'MODE? CH4'                              -> b'0\n'                               331.7 ms
+22:35:30.786 W  'MODE CH4,0'                                 0.2 ms
+22:35:30.992 Q  'MODE? CH4'                              -> b'0\n'                               205.4 ms
+22:35:30.992 W  'OUTPut:ON:DELay CH1,3601'                   0.0 ms
+22:35:31.399 Q  'OUTPut:ON:DELay? CH1'                   -> b'3600.000000\n'                     407.6 ms
+22:35:31.400 W  'OUTPut:ON:DELay CH1,-1'                     0.0 ms
+22:35:31.495 Q  'OUTPut:ON:DELay? CH1'                   -> b'0.000000\n'                         95.0 ms
+22:35:31.495 W  'OUTPut:ON:DELay CH1,MAXimum'                0.0 ms
+22:35:31.810 Q  'OUTPut:ON:DELay? CH1'                   -> b'3600.000000\n'                     315.6 ms
+22:35:31.811 W  'OUTPut:ON:DELay CH1,MINimum'                0.0 ms
+22:35:32.014 Q  'OUTPut:ON:DELay? CH1'                   -> b'0.000000\n'                        203.7 ms
+22:35:32.015 W  'OUTPut:ON:DELay CH1,DEFault'                0.1 ms
+22:35:32.276 Q  'OUTPut:ON:DELay? CH1'                   -> b'0.000000\n'                        261.2 ms
+22:35:32.276 W  'OUTPut:ON:DELay CH1,0'                      0.0 ms
+22:35:32.538 Q  'OUTPut:ON:DELay? CH1'                   -> b'0.000000\n'                        261.4 ms
+22:35:32.538 W  'OUTPut:OFF:DELay CH1,3601'                  0.1 ms
+22:35:32.797 Q  'OUTPut:OFF:DELay? CH1'                  -> b'3600.000000\n'                     259.1 ms
+22:35:32.798 W  'OUTPut:OFF:DELay CH1,-1'                    0.1 ms
+22:35:33.057 Q  'OUTPut:OFF:DELay? CH1'                  -> b'0.000000\n'                        259.5 ms
+22:35:33.057 W  'OUTPut:OFF:DELay CH1,MAXimum'               0.0 ms
+22:35:33.449 Q  'OUTPut:OFF:DELay? CH1'                  -> b'3600.000000\n'                     391.8 ms
+22:35:33.450 W  'OUTPut:OFF:DELay CH1,MINimum'               0.1 ms
+22:35:33.580 Q  'OUTPut:OFF:DELay? CH1'                  -> b'0.000000\n'                        129.8 ms
+22:35:33.580 W  'OUTPut:OFF:DELay CH1,DEFault'               0.1 ms
+22:35:33.838 Q  'OUTPut:OFF:DELay? CH1'                  -> b'0.000000\n'                        258.3 ms
+22:35:33.838 W  'OUTPut:OFF:DELay CH1,0'                     0.1 ms
+22:35:34.100 Q  'OUTPut:OFF:DELay? CH1'                  -> b'0.000000\n'                        261.3 ms
+22:35:34.100 W  'OUTPut:TRACK SERIES'                        0.1 ms
+22:35:34.359 Q  'OUTPut:TRACK?'                          -> b'1\n'                               259.0 ms
+22:35:34.364 Q  ':SOURce:VOLTage:SET? CH2'               -> b'28.000000\n'                         4.3 ms
+22:35:34.369 Q  ':SOURce:CURRent:SET? CH2'               -> b'3.000000\n'                          4.9 ms
+22:35:34.372 Q  ':SOURce:OVP? CH2'                       -> b'35.200001\n'                         3.3 ms
+22:35:34.377 Q  ':SOURce:OCP? CH2'                       -> b'3.520000\n'                          4.9 ms
+22:35:34.382 Q  ':SOURce:VOLTage:SET? CH3'               -> b'14.000000\n'                         5.1 ms
+22:35:34.387 Q  ':SOURce:CURRent:SET? CH3'               -> b'3.100000\n'                          5.1 ms
+22:35:34.393 Q  ':SOURce:OVP? CH3'                       -> b'35.200001\n'                         5.2 ms
+22:35:34.398 Q  ':SOURce:OCP? CH3'                       -> b'3.520000\n'                          5.0 ms
+22:35:34.398 W  ':SOURce:VOLTage:SET CH2,40'                 0.0 ms
+22:35:34.619 Q  ':SOURce:VOLTage:SET? CH2'               -> b'40.000000\n'                       220.4 ms
+22:35:34.624 Q  ':SOURce:VOLTage:SET? CH3'               -> b'20.000000\n'                         5.0 ms
+22:35:34.624 W  ':SOURce:VOLTage:SET CH2,70'                 0.1 ms
+22:35:34.879 Q  ':SOURce:VOLTage:SET? CH2'               -> b'60.000000\n'                       254.6 ms
+22:35:34.881 Q  ':SOURce:VOLTage:SET? CH3'               -> b'30.000000\n'                         2.1 ms
+22:35:34.881 W  ':SOURce:VOLTage:SET CH2,200'                0.1 ms
+22:35:35.141 Q  ':SOURce:VOLTage:SET? CH2'               -> b'60.000000\n'                       259.6 ms
+22:35:35.145 Q  ':SOURce:VOLTage:SET? CH3'               -> b'30.000000\n'                         3.2 ms
+22:35:35.145 W  ':SOURce:CURRent:SET CH2,2'                  0.1 ms
+22:35:35.474 Q  ':SOURce:CURRent:SET? CH2'               -> b'2.000000\n'                        328.8 ms
+22:35:35.477 Q  ':SOURce:CURRent:SET? CH3'               -> b'2.100000\n'                          2.8 ms
+22:35:35.477 W  ':SOURce:VOLTage:SET CH3,6'                  0.1 ms
+22:35:35.659 Q  ':SOURce:VOLTage:SET? CH2'               -> b'60.000000\n'                       182.2 ms
+22:35:35.665 Q  ':SOURce:VOLTage:SET? CH3'               -> b'30.000000\n'                         5.2 ms
+22:35:35.665 W  ':SOURce:CURRent:SET CH3,1.5'                0.1 ms
+22:35:35.922 Q  ':SOURce:CURRent:SET? CH2'               -> b'2.000000\n'                        256.8 ms
+22:35:35.927 Q  ':SOURce:CURRent:SET? CH3'               -> b'2.100000\n'                          5.2 ms
+22:35:35.931 Q  ':SOURce:VOLTage:SET? CH2'               -> b'60.000000\n'                         3.6 ms
+22:35:35.937 Q  ':SOURce:CURRent:SET? CH2'               -> b'2.000000\n'                          5.2 ms
+22:35:35.942 Q  ':SOURce:OVP? CH2'                       -> b'35.200001\n'                         5.3 ms
+22:35:35.946 Q  ':SOURce:OCP? CH2'                       -> b'3.520000\n'                          3.9 ms
+22:35:35.951 Q  ':SOURce:VOLTage:SET? CH3'               -> b'30.000000\n'                         4.5 ms
+22:35:35.956 Q  ':SOURce:CURRent:SET? CH3'               -> b'2.100000\n'                          4.9 ms
+22:35:35.962 Q  ':SOURce:OVP? CH3'                       -> b'35.200001\n'                         5.5 ms
+22:35:35.966 Q  ':SOURce:OCP? CH3'                       -> b'3.520000\n'                          3.7 ms
+22:35:35.966 W  'OUTPut:TRACK PARALLEL'                      0.1 ms
+22:35:36.181 Q  'OUTPut:TRACK?'                          -> b'2\n'                               214.5 ms
+22:35:36.183 Q  ':SOURce:VOLTage:SET? CH2'               -> b'30.000000\n'                         2.5 ms
+22:35:36.189 Q  ':SOURce:CURRent:SET? CH2'               -> b'4.000000\n'                          5.3 ms
+22:35:36.194 Q  ':SOURce:OVP? CH2'                       -> b'35.200001\n'                         4.9 ms
+22:35:36.198 Q  ':SOURce:OCP? CH2'                       -> b'3.520000\n'                          4.3 ms
+22:35:36.202 Q  ':SOURce:VOLTage:SET? CH3'               -> b'30.000000\n'                         3.9 ms
+22:35:36.207 Q  ':SOURce:CURRent:SET? CH3'               -> b'2.000000\n'                          4.2 ms
+22:35:36.214 Q  ':SOURce:OVP? CH3'                       -> b'35.200001\n'                         7.1 ms
+22:35:36.220 Q  ':SOURce:OCP? CH3'                       -> b'3.520000\n'                          6.0 ms
+22:35:36.220 W  ':SOURce:CURRent:SET CH2,7'                  0.1 ms
+22:35:36.441 Q  ':SOURce:CURRent:SET? CH2'               -> b'6.464000\n'                        220.5 ms
+22:35:36.446 Q  ':SOURce:CURRent:SET? CH3'               -> b'3.232000\n'                          4.7 ms
+22:35:36.446 W  ':SOURce:CURRent:SET CH2,20'                 0.1 ms
+22:35:36.702 Q  ':SOURce:CURRent:SET? CH2'               -> b'6.464000\n'                        255.8 ms
+22:35:36.707 Q  ':SOURce:CURRent:SET? CH3'               -> b'3.232000\n'                          5.1 ms
+22:35:36.708 W  ':SOURce:VOLTage:SET CH2,10'                 0.2 ms
+22:35:36.720 Q  ':SOURce:VOLTage:SET? CH2'               -> b'10.000000\n'                        12.3 ms
+22:35:36.724 Q  ':SOURce:VOLTage:SET? CH3'               -> b'10.000000\n'                         3.9 ms
+22:35:36.724 W  ':SOURce:VOLTage:SET CH3,8'                  0.2 ms
+22:35:36.964 Q  ':SOURce:VOLTage:SET? CH2'               -> b'10.000000\n'                       238.9 ms
+22:35:36.969 Q  ':SOURce:VOLTage:SET? CH3'               -> b'10.000000\n'                         5.1 ms
+22:35:36.969 W  ':SOURce:CURRent:SET CH3,1'                  0.2 ms
+22:35:37.223 Q  ':SOURce:CURRent:SET? CH2'               -> b'6.464000\n'                        253.6 ms
+22:35:37.227 Q  ':SOURce:CURRent:SET? CH3'               -> b'3.232000\n'                          3.8 ms
+22:35:37.232 Q  ':SOURce:VOLTage:SET? CH2'               -> b'10.000000\n'                         5.0 ms
+22:35:37.238 Q  ':SOURce:CURRent:SET? CH2'               -> b'6.464000\n'                          5.0 ms
+22:35:37.243 Q  ':SOURce:OVP? CH2'                       -> b'35.200001\n'                         4.9 ms
+22:35:37.248 Q  ':SOURce:OCP? CH2'                       -> b'3.520000\n'                          5.2 ms
+22:35:37.251 Q  ':SOURce:VOLTage:SET? CH3'               -> b'10.000000\n'                         2.6 ms
+22:35:37.253 Q  ':SOURce:CURRent:SET? CH3'               -> b'3.232000\n'                          2.0 ms
+22:35:37.255 Q  ':SOURce:OVP? CH3'                       -> b'35.200001\n'                         1.9 ms
+22:35:37.257 Q  ':SOURce:OCP? CH3'                       -> b'3.520000\n'                          2.2 ms
+22:35:37.257 W  'OUTPut:TRACK INDEPENDENT'                   0.1 ms
+22:35:37.484 Q  'OUTPut:TRACK?'                          -> b'0\n'                               226.7 ms
+22:35:37.490 Q  'OVP? CH2'                               -> b'35.200001\n'                         5.0 ms
+22:35:37.495 Q  'OCP? CH2'                               -> b'3.520000\n'                          5.0 ms
+22:35:37.500 Q  'VOLTage? CH2'                           -> b'10.000000\n'                         5.1 ms
+22:35:37.500 W  'VOLTage CH2,14.000000'                      0.1 ms
+22:35:37.914 Q  'VOLTage? CH2'                           -> b'14.000000\n'                       413.8 ms
+22:35:37.918 Q  'CURRent? CH2'                           -> b'3.232000\n'                          3.6 ms
+22:35:37.919 W  'CURRent CH2,3.000000'                       0.1 ms
+22:35:38.004 Q  'CURRent? CH2'                           -> b'3.000000\n'                         85.7 ms
+22:35:38.008 Q  'OVP? CH3'                               -> b'35.200001\n'                         3.9 ms
+22:35:38.014 Q  'OCP? CH3'                               -> b'3.520000\n'                          5.0 ms
+22:35:38.018 Q  'VOLTage? CH3'                           -> b'10.000000\n'                         4.0 ms
+22:35:38.018 W  'VOLTage CH3,12.000000'                      0.2 ms
+22:35:38.264 Q  'VOLTage? CH3'                           -> b'12.000000\n'                       245.2 ms
+22:35:38.267 Q  'CURRent? CH3'                           -> b'3.232000\n'                          3.1 ms
+22:35:38.267 W  'CURRent CH3,2.000000'                       0.1 ms
+22:35:38.525 Q  'CURRent? CH3'                           -> b'2.000000\n'                        258.0 ms
+22:35:38.529 Q  'OUTPut:ON:DELay? CH1'                   -> b'0.000000\n'                          3.8 ms
+22:35:38.535 Q  'OUTPut:OFF:DELay? CH1'                  -> b'0.000000\n'                          5.4 ms
+22:35:38.535 W  'MODE CH1,0'                                 0.0 ms
+22:35:38.955 Q  'MODE? CH1'                              -> b'0\n'                               420.2 ms
+22:35:38.956 W  'MODE CH4,0'                                 0.1 ms
+22:35:39.046 Q  'MODE? CH4'                              -> b'0\n'                                90.1 ms
+22:35:39.051 Q  'OUTPut:TRACK?'                          -> b'0\n'                                 5.0 ms
+22:35:39.055 Q  'MODE? CH2'                              -> b'0\n'                                 3.9 ms
+22:35:39.059 Q  'MODE? CH3'                              -> b'0\n'                                 3.8 ms
+22:35:39.062 Q  'OVP? CH1'                               -> b'6.600000\n'                          2.5 ms
+22:35:39.067 Q  'OCP? CH1'                               -> b'3.520000\n'                          4.7 ms
+22:35:39.071 Q  'OCP:DELay? CH1'                         -> b'0.000000\n'                          3.8 ms
+22:35:39.074 Q  'OCP:STATe? CH1'                         -> b'0\n'                                 3.3 ms
+22:35:39.078 Q  'VOLTage? CH1'                           -> b'5.000000\n'                          3.5 ms
+22:35:39.082 Q  'CURRent? CH1'                           -> b'2.000000\n'                          4.4 ms
+22:35:39.087 Q  'OUTPut:ON:DELay? CH1'                   -> b'0.000000\n'                          4.8 ms
+22:35:39.092 Q  'OUTPut:OFF:DELay? CH1'                  -> b'0.000000\n'                          4.3 ms
+22:35:39.094 Q  'OVP? CH2'                               -> b'35.200001\n'                         2.6 ms
+22:35:39.099 Q  'OCP? CH2'                               -> b'3.520000\n'                          4.4 ms
+22:35:39.104 Q  'OCP:DELay? CH2'                         -> b'0.000000\n'                          4.8 ms
+22:35:39.107 Q  'OCP:STATe? CH2'                         -> b'0\n'                                 3.1 ms
+22:35:39.110 Q  'VOLTage? CH2'                           -> b'14.000000\n'                         2.6 ms
+22:35:39.115 Q  'CURRent? CH2'                           -> b'3.000000\n'                          5.4 ms
+22:35:39.120 Q  'OUTPut:ON:DELay? CH2'                   -> b'0.000000\n'                          4.4 ms
+22:35:39.125 Q  'OUTPut:OFF:DELay? CH2'                  -> b'0.000000\n'                          5.0 ms
+22:35:39.128 Q  'OVP? CH3'                               -> b'35.200001\n'                         3.1 ms
+22:35:39.133 Q  'OCP? CH3'                               -> b'3.520000\n'                          5.2 ms
+22:35:39.138 Q  'OCP:DELay? CH3'                         -> b'0.000000\n'                          4.9 ms
+22:35:39.144 Q  'OCP:STATe? CH3'                         -> b'0\n'                                 5.2 ms
+22:35:39.149 Q  'VOLTage? CH3'                           -> b'12.000000\n'                         5.2 ms
+22:35:39.154 Q  'CURRent? CH3'                           -> b'2.000000\n'                          4.8 ms
+22:35:39.160 Q  'OUTPut:ON:DELay? CH3'                   -> b'0.000000\n'                          5.2 ms
+22:35:39.165 Q  'OUTPut:OFF:DELay? CH3'                  -> b'0.000000\n'                          5.1 ms
+22:35:39.169 Q  'OVP? CH4'                               -> b'6.600000\n'                          3.8 ms
+22:35:39.174 Q  'OCP? CH4'                               -> b'3.520000\n'                          5.2 ms
+22:35:39.179 Q  'OCP:DELay? CH4'                         -> b'0.000000\n'                          5.0 ms
+22:35:39.182 Q  'OCP:STATe? CH4'                         -> b'0\n'                                 2.4 ms
+22:35:39.184 Q  'VOLTage? CH4'                           -> b'0.000000\n'                          2.1 ms
+22:35:39.187 Q  'CURRent? CH4'                           -> b'0.000000\n'                          2.4 ms
+22:35:39.189 Q  'OUTPut:ON:DELay? CH4'                   -> b'0.000000\n'                          2.5 ms
+22:35:39.195 Q  'OUTPut:OFF:DELay? CH4'                  -> b'0.000000\n'                          5.2 ms
+22:35:39.200 Q  'LOCK?'                                  -> b'1\n'                                 5.3 ms
+22:35:39.200 W  'LOCK 0'                                     0.1 ms
+22:35:39.370 Q  'LOCK?'                                  -> b'0\n'                               169.6 ms
+22:35:39.376 Q  'OUTPut:TRACK?'                          -> b'0\n'                                 5.2 ms
+22:35:39.382 Q  'MODE? CH2'                              -> b'0\n'                                 6.3 ms
+22:35:39.388 Q  'MODE? CH3'                              -> b'0\n'                                 6.0 ms
+22:35:39.394 Q  'OVP? CH1'                               -> b'6.600000\n'                          5.2 ms
+22:35:39.399 Q  'OCP? CH1'                               -> b'3.520000\n'                          5.2 ms
+22:35:39.404 Q  'OCP:DELay? CH1'                         -> b'0.000000\n'                          5.1 ms
+22:35:39.410 Q  'OCP:STATe? CH1'                         -> b'0\n'                                 5.0 ms
+22:35:39.415 Q  'VOLTage? CH1'                           -> b'5.000000\n'                          5.3 ms
+22:35:39.418 Q  'CURRent? CH1'                           -> b'2.000000\n'                          2.6 ms
+22:35:39.421 Q  'OUTPut:ON:DELay? CH1'                   -> b'0.000000\n'                          2.8 ms
+22:35:39.424 Q  'OUTPut:OFF:DELay? CH1'                  -> b'0.000000\n'                          2.7 ms
+22:35:39.426 Q  'OVP? CH2'                               -> b'35.200001\n'                         2.0 ms
+22:35:39.429 Q  'OCP? CH2'                               -> b'3.520000\n'                          3.3 ms
+22:35:39.433 Q  'OCP:DELay? CH2'                         -> b'0.000000\n'                          3.7 ms
+22:35:39.438 Q  'OCP:STATe? CH2'                         -> b'0\n'                                 5.1 ms
+22:35:39.442 Q  'VOLTage? CH2'                           -> b'14.000000\n'                         3.1 ms
+22:35:39.447 Q  'CURRent? CH2'                           -> b'3.000000\n'                          5.2 ms
+22:35:39.452 Q  'OUTPut:ON:DELay? CH2'                   -> b'0.000000\n'                          4.8 ms
+22:35:39.456 Q  'OUTPut:OFF:DELay? CH2'                  -> b'0.000000\n'                          4.1 ms
+22:35:39.462 Q  'OVP? CH3'                               -> b'35.200001\n'                         5.1 ms
+22:35:39.466 Q  'OCP? CH3'                               -> b'3.520000\n'                          4.2 ms
+22:35:39.470 Q  'OCP:DELay? CH3'                         -> b'0.000000\n'                          3.7 ms
+22:35:39.474 Q  'OCP:STATe? CH3'                         -> b'0\n'                                 3.6 ms
+22:35:39.477 Q  'VOLTage? CH3'                           -> b'12.000000\n'                         3.2 ms
+22:35:39.481 Q  'CURRent? CH3'                           -> b'2.000000\n'                          3.2 ms
+22:35:39.486 Q  'OUTPut:ON:DELay? CH3'                   -> b'0.000000\n'                          4.9 ms
+22:35:39.490 Q  'OUTPut:OFF:DELay? CH3'                  -> b'0.000000\n'                          4.3 ms
+22:35:39.494 Q  'OVP? CH4'                               -> b'6.600000\n'                          3.3 ms
+22:35:39.498 Q  'OCP? CH4'                               -> b'3.520000\n'                          3.5 ms
+22:35:39.501 Q  'OCP:DELay? CH4'                         -> b'0.000000\n'                          3.5 ms
+22:35:39.504 Q  'OCP:STATe? CH4'                         -> b'0\n'                                 2.9 ms
+22:35:39.510 Q  'VOLTage? CH4'                           -> b'0.000000\n'                          5.1 ms
+22:35:39.513 Q  'CURRent? CH4'                           -> b'0.000000\n'                          3.5 ms
+22:35:39.516 Q  'OUTPut:ON:DELay? CH4'                   -> b'0.000000\n'                          2.9 ms
+22:35:39.522 Q  'OUTPut:OFF:DELay? CH4'                  -> b'0.000000\n'                          5.6 ms
+22:35:39.559 Q  'LOCK?'                                  -> b'0\n'                                37.0 ms
+22:35:39.563 Q  'OUTPut? CH1'                            -> b'0\n'                                 2.4 ms
+22:35:39.565 Q  'OUTPut? CH2'                            -> b'0\n'                                 1.9 ms
+22:35:39.568 Q  'OUTPut? CH3'                            -> b'0\n'                                 2.4 ms
+22:35:39.573 Q  'OUTPut? CH4'                            -> b'0\n'                                 4.9 ms

@@ -9,3 +9,5 @@ dist/
 build/
 examples/results/
 *.local.*
+acceptance_report.md
+acceptance_snapshot*.json

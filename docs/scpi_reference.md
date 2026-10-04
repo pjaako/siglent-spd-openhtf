@@ -39,6 +39,7 @@ Facts stated:
 
 - TCP port: **5025**.
 - Manual does not say whether the socket transport is TCP-only, multiple-connections, nor what line terminator the instrument expects on input (see Open Questions).
+- Verified on hardware (SPD4323X, fw 4.1.2.9R1, 2026-10-05): port 5025 serves **one client at a time**: a second connection is accepted by TCP but gets no reply while the first is open (docs/hardware_findings.md Q3). The input terminator is LF (CRLF also works), replies end in a single LF (Q1). VXI-11, web and telnet were not probed.
 
 ### 1.3 Web service (LAN) - section 10.5
 
@@ -91,6 +92,7 @@ Summary of rules:
 ⚠ manual note: The grammar section never explains the parentheses in `(CHn)`; they are not sent (all examples are `CH1`, not `(CH1)`). Whether `(CHn)` is optional is not stated explicitly; the "[:SET] ... VOLT? CH1 ... will operate on the current channel" sentence is confusing since a channel is given in that example.
 ⚠ manual note: Some examples omit the leading colon/`[:SOURce]` and some include it (`:SOURce:VOLTage:SET CH1,3` vs `OUTPut CH1,1`). Both are shown in the manual. Not stated whether a leading `:` is required.
 ⚠ manual note: The manual states `*` common commands without grammar discussion; terminator character(s) for commands sent to the instrument are not specified (see Open Questions).
+- Verified on hardware (SPD4323X, fw 4.1.2.9R1, 2026-10-05): forms, terminator and chaining (docs/hardware_findings.md Q1, Q7, Q8). Commands end in LF (CRLF also accepted); every reply ends in a single LF. The leading `:`, `SOURce:`/`SOUR:`, `:SET`, `:STATe` and `[:RUN]` are optional, long and short keywords in any case work (`ch1` too), and the channel argument is honoured in every form. A space before the comma (`CH1 ,1.9`), after it (`CH1, 1`) or no space before the channel (`VOLTage?CH1`) all work. Rejected (no reply): `VOL`, `VOLTAG`, literal brackets (`VOLTage[:SET]?`), `MEAS:POW?` (`POWER` has no short form), `OUTP:TRAC?` (`TRACK` has no short form), channels `CH0`, `CH5`, `1`, `(CH1)`. `VOLTage?` without a channel answers CH1's value; `OUTPut:TRACK? CH1` (an argument on a channel-less query) gets no reply. `;` chains work for writes and queries, but the replies of several queries are concatenated with no separator (`*IDN?;*OPC?` -> `...4.1.2.9R11`). An invalid query is never answered (the caller times out); there is no error reply.
 
 ---
 
@@ -230,17 +232,20 @@ Note on the `(CHn)` placeholder: examples use `CH1`..`CH4` (CH2/CH3 only for `MO
 - Example: `*IDN?`
 - Response: `Siglent\sTechnologies,SPD4306X,0123456789,4.1.2.4\n`
 - ⚠ manual note: `\s` is the manual's notation, presumably a space ("Siglent Technologies"). "serial port number" is the manual's wording for serial number. The response example is for an SPD4306X; model strings for others not shown.
+- Verified on hardware (SPD4323X, fw 4.1.2.9R1, 2026-10-05): `Siglent Technologies,SPD4323X,<serial>,4.1.2.9R1`: the `\s` is a plain space, 4 comma-separated fields, and the firmware field is not purely numeric (`R1` suffix) (Q4).
 
 **2. `*RST`**
 - Syntax: `*RST`
 - Description: "Restore the state of the device to the initial state"
 - Example: `*RST`
 - ⚠ manual note: Does not define what "initial state" is (compare 9.3.1 Default Settings).
+- Verified on hardware (SPD4323X, fw 4.1.2.9R1, 2026-10-05): not sent by any tool or the plug (Q18).
 
 **3. `*CLS`**
 - Syntax: `*CLS`
 - Description: "Clear the values of all event registers and clear the error list at the same time"
 - Example: `*CLS`
+- Verified on hardware (SPD4323X, fw 4.1.2.9R1, 2026-10-05): clears the event status register (`*ESR?` reads 0 afterwards) (Q6).
 
 **4. `*ESE`**
 - Syntax: `*ESE <number>`
@@ -253,17 +258,20 @@ Note on the `(CHn)` placeholder: examples use `CH1`..`CH4` (CH2/CH3 only for `MO
 - Example: `*ESE?`
 - Response: `64`
 - ⚠ manual note: Response example (64) is not consistent with the preceding example (`*ESE 16`) - they are independent examples. No terminator printed on this response (others show `\n`).
+- Verified on hardware (SPD4323X, fw 4.1.2.9R1, 2026-10-05): answers `0`, LF-terminated (Q4).
 
 **6. `*ESR?`**
 - Syntax: `*ESR?`
 - Description: "Query and clear the event value of the standard event status register"
 - Example: `*ESR?`
 - Response: `0`
+- Verified on hardware (SPD4323X, fw 4.1.2.9R1, 2026-10-05): answers `0` normally; `32` (bit 5, command error) after unknown headers or unanswered queries, but not reliably (the same unknown query set it after `*CLS` and not after a plain `*ESR?`); clears on read; stays `0` after an invalid channel in a write, a non-numeric value or a clamped out-of-range value. Not a dependable error channel (Q6).
 
 **7. `*OPC`**
 - Syntax: `*OPC`
 - Description: "Operation complete"
 - Example: `*OPC`
+- Verified on hardware (SPD4323X, fw 4.1.2.9R1, 2026-10-05): sets bit 0 of `*ESR?` (`*ESR?` -> `1` right after) (Q6, Q11).
 
 **8. `*OPC?`**
 - Syntax: `*OPC?`
@@ -271,6 +279,7 @@ Note on the `(CHn)` placeholder: examples use `CH1`..`CH4` (CH2/CH3 only for `MO
 - Example: `*OPC?`
 - Response: `1`
 - (So `*OPC?` IS documented.)
+- Verified on hardware (SPD4323X, fw 4.1.2.9R1, 2026-10-05): answers `1`; right after a write it is held for the same ~220 ms as any other query, so it adds nothing over a read-back (Q11).
 
 **9. `*SRE`**
 - Syntax: `*SRE <number>`
@@ -282,12 +291,14 @@ Note on the `(CHn)` placeholder: examples use `CH1`..`CH4` (CH2/CH3 only for `MO
 - Description: "Query the enable value of the status byte register"
 - Example: `*SRE?`
 - Response: `24`
+- Verified on hardware (SPD4323X, fw 4.1.2.9R1, 2026-10-05): answers `0` (Q4).
 
 **11. `*STB?`**
 - Syntax: `*STB?`
 - Description: "Query the event value of the status byte register"
 - Example: `*STB?`
 - Response: `72`
+- Verified on hardware (SPD4323X, fw 4.1.2.9R1, 2026-10-05): answered `0` throughout, also when `*ESR?` showed 32 (Q6).
 
 **12. `*TST?`**
 - Syntax: `*TST?`
@@ -295,11 +306,13 @@ Note on the `(CHn)` placeholder: examples use `CH1`..`CH4` (CH2/CH3 only for `MO
 - Example: `*TST?`
 - Response: `0`
 - ⚠ manual note: Meaning of 0 (pass?) not stated.
+- Verified on hardware (SPD4323X, fw 4.1.2.9R1, 2026-10-05): not sent (Q6).
 
 **13. `*WAI`**
 - Syntax: `*WAI`
 - Description: "Wait for all outstanding operations to complete before executing any other commands"
 - Example: `*WAI`
+- Verified on hardware (SPD4323X, fw 4.1.2.9R1, 2026-10-05): accepted, no visible effect (Q11).
 
 ---
 
@@ -313,6 +326,9 @@ Note on the `(CHn)` placeholder: examples use `CH1`..`CH4` (CH2/CH3 only for `MO
 - Query example: `:SOURce:VOLTage:SET? CH1`
 - Response: `3.000000\n`
 - Units: volts (from example text "3V"). Range/default: not stated in chapter 10.
+- Verified on hardware (SPD4323X, fw 4.1.2.9R1, 2026-10-05): `VOLTage CH1,1.2345` reads back `1.234500` (stored with 4 decimals, no rounding to 1 mV); values are 32-bit floats. Out-of-range values are clamped silently and never reported: `7.5` -> `6.060000` (1.01 x the 6 V rating), `-1` -> `0.000000`. `MINimum`/`MAXimum`/`DEFault` set `0.000000` / `6.060000` / `0.000000`. As query arguments `VOLTage? CH1,MAX` -> `6.060000`, also `MAXimum`, `MIN`, `DEF`, `DEFault`, with or without a space after the comma; `MAX` is per channel and ignores the track mode (32.320000 for CH2/CH3). The plug sends `:SOURce:VOLTage:SET? CHn,MAXimum` (`max_voltage()`). In SERIES `VOLTage? CH2` answers the combined voltage (`28.000000` with 14 V per half). What a write to CH2/CH3 means in a coupled mode is untested (Q9, Q14, Q21).
+- Verified on hardware (SPD4323X, fw 4.1.2.9R1, 2026-10-04, run 2): `VOLTage CH2,20` in SERIES reads back `20.000000` on CH2 and `10.000000` on CH3 (the value written is the combined voltage); `VOLTage CH2,MAXimum` gives `32.320000` / `16.160000`. Writes to CH3 and the voltage of CH2 in PARALLEL were not tried (Q21).
+- Verified on hardware (SPD4323X, fw 4.1.2.9R1, 2026-10-04, run 2 addendum): `VOLTage CH2,70` and `,200` in SERIES read back `60.000000` (the series rating; CH3 `30.000000`), `,40` is accepted; `VOLTage CH3,6` is ignored (nothing changes); in PARALLEL `VOLTage CH2,10` applies to CH3 as well (`10.000000` on both) (Q21).
 
 **2. Set OVP value**
 - Set: `[:SOURce]:OVP (CHn),{<value> | MINimum | MAXimum |DEFault}`
@@ -322,6 +338,7 @@ Note on the `(CHn)` placeholder: examples use `CH1`..`CH4` (CH2/CH3 only for `MO
 - Query example: `:SOURce:OVP? CH1`
 - Response: `15.000000\n`
 - Units: volts. (Response 15 V is the CH1 rated voltage of SPD4306X/SPD4121X.)
+- Verified on hardware (SPD4323X, fw 4.1.2.9R1, 2026-10-05): default and `MAXimum` are 1.1 x the rating (`OVP? CH1` -> `6.600000`, `OVP? CH2` -> `35.200001` because values are float32); the range is 0.1 x .. 1.1 x the rating and out-of-range values are clamped silently (`OVP CH1,7.2` -> `6.600000`, `0.3` -> `0.600000`); `MINimum` -> `0.600000`. No mutual limiting with the voltage setpoint while the output is off. Not rescaled by SERIES/PARALLEL. Keywords as query arguments (`OVP? CH1,MAX`) get no reply (Q9, Q10, Q14).
 
 **3. Get whether the channel triggers overvoltage protection**
 - Query: `[:SOURce]:OVP:PROTect:STATe? (CHn)`
@@ -329,6 +346,7 @@ Note on the `(CHn)` placeholder: examples use `CH1`..`CH4` (CH2/CH3 only for `MO
 - Example: `:SOURce:OVP:PROTect:STATe? CH1`
 - Response: `0\n`
 - ⚠ manual note: Meaning of 0/1 not explicitly stated (0 presumably = not tripped). Query only; no OVP enable/disable command exists in the manual (OVP has no switch, unlike OCP).
+- Verified on hardware (SPD4323X, fw 4.1.2.9R1, 2026-10-05): answers `0` with nothing tripped; `1` = tripped has never been observed (Q10, still open).
 
 **4. Set current value**
 - Set: `[:SOURce]:CURRent[:SET] (CHn),{<value> | MINimum | MAXimum |DEFault}`
@@ -338,6 +356,9 @@ Note on the `(CHn)` placeholder: examples use `CH1`..`CH4` (CH2/CH3 only for `MO
 - Query example: `:SOURce:CURRent:SET? CH1`
 - Response: `2.000000\n`
 - Units: amperes.
+- Verified on hardware (SPD4323X, fw 4.1.2.9R1, 2026-10-05): `CURRent CH1,0.1234` reads back `0.123400`; clamped silently to 1.01 x the rating (`4` -> `3.232000`) and to 0 (`-0.1` -> `0.000000`); `MINimum`/`MAXimum`/`DEFault` -> `0.000000` / `3.232000` / `0.000000`; `CURRent? CH1,MAX` -> `3.232000`. The plug sends `:SOURce:CURRent:SET? CHn,MAXimum` (`max_current()`). In PARALLEL `CURRent? CH2` answers the combined current (`6.000000` with 3 A per half) (Q9, Q14, Q21).
+- Verified on hardware (SPD4323X, fw 4.1.2.9R1, 2026-10-04, run 2): `CURRent CH2,5` in PARALLEL reads back `5.000000` on CH2 and `2.500000` on CH3 (the value written is the combined current; 5 A is above the 3.232 A `MAX`); `CURRent CH2,MAXimum` gives `3.232000` / `1.616000` (Q21).
+- Verified on hardware (SPD4323X, fw 4.1.2.9R1, 2026-10-04, run 2 addendum): `CURRent CH2,7` and `,20` in PARALLEL read back `6.464000` (CH3 `3.232000`); in SERIES `CURRent CH2,2` reads `2.000000` on CH2 and `2.100000` on CH3 (CH3 = CH2 + 0.1 A, a display rule); `CURRent CH3,<x>` is ignored in both coupled modes (Q21).
 
 **5. Set OCP value**
 - Set: `[:SOURce]:OCP (CHn),{<value> | MINimum | MAXimum |DEFault}`
@@ -348,12 +369,14 @@ Note on the `(CHn)` placeholder: examples use `CH1`..`CH4` (CH2/CH3 only for `MO
 - Response: (none printed in the manual)
 - ⚠ manual note: No response example is given for this query. Example `OCP CH1,8` (8 A) exceeds the 1.5 A CH1 rating of SPD4306X/4121X (and 3.2 A of SPD4323X); the panel text says OCP can be set 0.1~1.1 times rated current - the example value is illustrative only / would be out of range.
 - ⚠ manual note: Likewise the OVP example (`CH1,8`, 8 V) on a 6 V CH1 (SPD4323X) would exceed 1.1 x 6 V.
+- Verified on hardware (SPD4323X, fw 4.1.2.9R1, 2026-10-05): `OCP? CHn` answers a plain number like `OVP?` (`3.520000` = 1.1 x 3.2 A, also the default and `MAXimum`); range 0.1 x .. 1.1 x the rating, clamped silently (`3.84` -> `3.520000`, `0.16` -> `0.320000`); `MINimum` -> `0.320000`; keywords as query arguments get no reply (Q5, Q9, Q14).
 
 **6. Get whether the channel triggers overcurrent protection**
 - Query: `[:SOURce]:OCP:PROTect:STATe? (CHn)`
 - Description: "Get whether the channel triggers overcurrent protection"
 - Example: `:SOURce:OCP:PROTect:STATe? CH1`
 - Response: `0\n`
+- Verified on hardware (SPD4323X, fw 4.1.2.9R1, 2026-10-05): answers `0` with nothing tripped; `1` = tripped has never been observed (Q10, still open).
 
 **7. Set OCP delay value**
 - Set: `[:SOURce]:OCP:DELay (CHn),{<value> | MINimum | MAXimum |DEFault}`
@@ -363,6 +386,7 @@ Note on the `(CHn)` placeholder: examples use `CH1`..`CH4` (CH2/CH3 only for `MO
 - Query example: `OCP:DELay? CH1`
 - Response: `0.000000\n`
 - Units: seconds.
+- Verified on hardware (SPD4323X, fw 4.1.2.9R1, 2026-10-05): range 0..3600 s, out-of-range values clamped silently (`3601` -> `3600.000000`, `-1` -> `0.000000`), no rounding to 0.01 s (`1.2345` reads back `1.234500`); `MAXimum`/`MINimum`/`DEFault` -> `3600.000000` / `0.000000` / `0.000000`; keywords as query arguments get no reply (Q9).
 
 **8. Set OCP switch state**
 - Set: `[:SOURce]:OCP:STATe (CHn),{ON | OFF | 0 | 1}`
@@ -372,6 +396,7 @@ Note on the `(CHn)` placeholder: examples use `CH1`..`CH4` (CH2/CH3 only for `MO
 - Query example: `:SOURce:OCP:STATe? CH1`
 - Response: `1\n`
 - Panel (8.1.2): "The instrument will not trigger the overcurrent protection when the OCP is in OFF state."
+- Verified on hardware (SPD4323X, fw 4.1.2.9R1, 2026-10-05): the manual example with a space after the comma (`OCP:STATe CH1, 1`) is accepted, and so is the form without the space (Q7).
 
 **9. Set output state of the channel**
 - Set: `[:SOURce]:OUTPut[:STATe] (CHn),{OFF | ON | 0 | 1}`
@@ -380,6 +405,8 @@ Note on the `(CHn)` placeholder: examples use `CH1`..`CH4` (CH2/CH3 only for `MO
 - Query: `[:SOURce]:OUTPut[:STATe]? (CHn)` - "Get the output state of the selected channel"
 - Query example: `OUTPut? CH1`
 - Response: `0\n`
+- Verified on hardware (SPD4323X, fw 4.1.2.9R1, 2026-10-05): `OUTPut? CHn` answers `0` with the output off. No `OUTPut CHn,<x>` write was sent in run 1 (Q4, experiment 30 pending).
+- Verified on hardware (SPD4323X, fw 4.1.2.9R1, 2026-10-04, run 2): `OUTPut CH1,1` -> `OUTPut? CH1` -> `1` (about 207 ms after the write); `OUTPut CH1,0` -> `0` (about 183 ms). Output on was run with nothing connected (Q11, Q22).
 
 **10. Set output state of all channels**
 - Set: `[:SOURce]:OUTPut:ALL[:STATe] {OFF | ON | 0 | 1}`
@@ -390,6 +417,8 @@ Note on the `(CHn)` placeholder: examples use `CH1`..`CH4` (CH2/CH3 only for `MO
 - Query example: `OUTPut:ALL?`
 - Response: `0\n`
 - ⚠ manual note: Format of the all-channel query response (single 0/1 vs per-channel) when channels differ is not documented.
+- Verified on hardware (SPD4323X, fw 4.1.2.9R1, 2026-10-05): `OUTPut:ALL?` answers `0` with all outputs off; the format with mixed channel states is still unknown. No `OUTPut:ALL <x>` write was sent in run 1.
+- Verified on hardware (SPD4323X, fw 4.1.2.9R1, 2026-10-04, run 2): `OUTPut:ALL 0` sent by the plug's `tearDown()`: every `OUTPut? CHn` then reads `0`; with an OFF delay it honours the delay (Q22). The format with mixed states is still unknown.
 
 **11. Set output ON delay value of the channel**
 - Set: `[:SOURce]: OUTPut:ON:DELay (CHn) ,{<value> | MINimum | MAXimum |DEFault}` (printed with a space after `[:SOURce]:` and before the comma)
@@ -399,6 +428,9 @@ Note on the `(CHn)` placeholder: examples use `CH1`..`CH4` (CH2/CH3 only for `MO
 - Query example: `OUTPut:ON:DELay? CH1`
 - Response: `0.000000\n`
 - Units: seconds.
+- Verified on hardware (SPD4323X, fw 4.1.2.9R1, 2026-10-05): only the query was exercised: `OUTPut:ON:DELay? CHn` answers a 6-decimal number; keywords as query arguments get no reply. The write was not exercised (Q9).
+- Verified on hardware (SPD4323X, fw 4.1.2.9R1, 2026-10-04, run 2): the write works: `OUTPut:ON:DELay CH1,0.5` reads back `0.500000`, `0` reads back `0.000000` (the plug's write smoke). Clamping was not tried (Q9).
+- Verified on hardware (SPD4323X, fw 4.1.2.9R1, 2026-10-04, run 2 addendum): clamps like `OCP:DELay`: `3601` -> `3600.000000`, `-1` -> `0.000000`, `MAXimum` 3600, `MINimum` and `DEFault` 0 (Q9).
 
 **12. Set output OFF delay value of the channel**
 - Set: `[:SOURce]:OUTPut:OFF:DELay (CHn),{<value> | MINimum | MAXimum |DEFault}`
@@ -407,6 +439,9 @@ Note on the `(CHn)` placeholder: examples use `CH1`..`CH4` (CH2/CH3 only for `MO
 - Query: `[:SOURce]:OUTPut:OFF:DELay? (CHn)` - "Get output OFF delay value of the selected channel"
 - Query example: `OUTPut:OFF:DELay? CH1`
 - Response: `3.000000\n`
+- Verified on hardware (SPD4323X, fw 4.1.2.9R1, 2026-10-05): only the query was exercised, as for the ON delay. The write and the semantics during a pending delay (Q22) were not exercised.
+- Verified on hardware (SPD4323X, fw 4.1.2.9R1, 2026-10-04, run 2): `OUTPut:OFF:DELay CH1,2` reads back `2.000000`. With a non-zero delay `OUTPut CHn,0` and `OUTPut:ALL 0` leave `OUTPut? CHn` at `1` and the voltage unchanged until the delay has elapsed (about 2.0 s for 2 s); writing the delay `0` while the switch-off is pending switches the output off at once (Q22). Clamping of the write was not tried.
+- Verified on hardware (SPD4323X, fw 4.1.2.9R1, 2026-10-04, run 2 addendum): clamps like the ON delay: `3601` -> `3600.000000`, `-1` -> `0.000000`, `MAXimum` 3600, `MINimum`/`DEFault` 0 (Q9).
 
 **13. Set series/parallel mode**
 - Set: `[:SOURce]:OUTPut:TRACK <value>` with `<value>：= {0|1|2| INDEPENDENT| SERIES| PARALLEL}`
@@ -416,6 +451,7 @@ Note on the `(CHn)` placeholder: examples use `CH1`..`CH4` (CH2/CH3 only for `MO
 - Query example: `OUTPut:TRACK?`
 - Response: `0\n`
 - ⚠ manual note: The only explicit mapping is 0 = independent (from the example). That 1 = series and 2 = parallel is inferred only from list order `{0|1|2| INDEPENDENT| SERIES| PARALLEL}` and is NOT stated. Whether the query returns a number or word is only shown as `0\n`. Takes no channel argument.
+- Verified on hardware (SPD4323X, fw 4.1.2.9R1, 2026-10-05): the query always answers the number: `0` independent, `1` series, `2` parallel; the words and the numbers are accepted in the set command. `OUTPut:TRACK? CH1` gets no reply, and `OUTP:TRAC?` is not accepted (`TRACK` has no short form). Entering SERIES or PARALLEL copies CH2's voltage and current setpoints into CH3, and CH3 keeps them after returning to INDEPENDENT (CH3 12 V / 2 A became 14 V / 3 A). OVP/OCP are unchanged. Rejection while an output is on was not tested (Q13).
 
 **14. Set working mode**
 - Set: `[:SOURce]:MODE {CH2|CH3},{0 | 1| 2W| 4W}`
@@ -425,6 +461,7 @@ Note on the `(CHn)` placeholder: examples use `CH1`..`CH4` (CH2/CH3 only for `MO
 - Query example: `MODE? CH2`
 - Response: `0\n`
 - ⚠ manual note: Mapping of 0/1 to 2W/4W is not stated (do not assume). Only CH2 and CH3 are valid. Panel chapter 8.5: 4W sense only for CH2/CH3 and "not supported in series or parallel mode". Query returns a number even after setting via word, per the one printed example.
+- Verified on hardware (SPD4323X, fw 4.1.2.9R1, 2026-10-05): `MODE CH2,<x>` accepts `2W`/`4W` and `0`/`1`; the query answers the number, `0` = 2W, `1` = 4W. `MODE? CH3` answers `0` (not written). `MODE? CH1` also answers `0`, although the manual lists CH2/CH3 only; CH4 was not tried (Q8, Q13).
 
 **15. Set list voltage**
 - Set: `[:SOURce]:LIST:VOLTage (CHn),<value1>,<value2>,…,<valuen>`
@@ -523,12 +560,15 @@ Note on the `(CHn)` placeholder: examples use `CH1`..`CH4` (CH2/CH3 only for `MO
 - Query example: `:SOURce:LOCK:STATe?`
 - Response: `0\n`
 - Note: panel chapter says the device is automatically locked when remotely controlled.
+- Verified on hardware (SPD4323X, fw 4.1.2.9R1, 2026-10-05): any remote write sets `LOCK` to 1 (queries never do); `LOCK 0` unlocks and the `LOCK` write itself does not re-lock; `LOCK ON|OFF|1|0` and `:SOURce:LOCK:STATe 1` all work; remote writes still work while locked. `LOCK?` is the slowest query (up to 369 ms). Whether the panel is visibly unlocked was not reported (Q12).
+- Verified on hardware (SPD4323X, fw 4.1.2.9R1, 2026-10-04, run 2): the plug's `tearDown()` ends with `:SOURce:LOCK:STATe OFF` (`:SOURce:LOCK:STATe?` -> `0`, `LOCK?` -> `0`) and the **front panel was seen unlocked** (Q12).
 
 **27. Clear the circuit protection status of the channel (overvoltage /overcurrent status)**
 - Set: `[:SOURce]:RESET:PROTect (CHn)`
 - Description: "Clear the circuit protection status of the channel(overvoltage /overcurrent status)"
 - Example: `:SOURce:RESET:PROTect CH1` - "Clear the circuit protection status of CH1(overvoltage /overcurrent status)"
 - No query form (use the `OVP:PROTect:STATe?` / `OCP:PROTect:STATe?` queries to read status).
+- Verified on hardware (SPD4323X, fw 4.1.2.9R1, 2026-10-05): not exercised in run 1 (no trip was provoked) (Q10).
 
 ---
 
@@ -739,6 +779,8 @@ Panel facts: universal setups contain "Independent/series/parallel mode" and "Ou
 - Description: "Get the voltage measurement value of the selected channel"
 - Example: `MEASure:VOLTage? CH1`
 - Response: `2.991442\n`
+- Verified on hardware (SPD4323X, fw 4.1.2.9R1, 2026-10-05): with the output off the reading is a small offset, not zero (`MEASure:VOLTage? CH1` -> `0.000557`); the same value repeats within ~10 ms, so the refresh is slower than the query rate (Q4, Q11).
+- Verified on hardware (SPD4323X, fw 4.1.2.9R1, 2026-10-04, run 2): output on (CH1 1.0 V / 0.1 A, nothing connected): the first reading after `OUTPut CH1,1` is `0.999164` (held ~295 ms for the write, no ramp visible), current `0.000230`, power `0.000229`, mode `CV`; after `OUTPut CH1,0` the open output decays below 20 mV in ~0.7 s (Q11).
 
 **2. Get the measured current value**
 - Query: `MEASure:CURRent? (CHn)`
@@ -752,6 +794,7 @@ Panel facts: universal setups contain "Independent/series/parallel mode" and "Ou
 - Example: `MEASure:POWER? CH1`
 - Response: `19.959515\n`
 - ⚠ manual note: `POWER` is printed fully upper-case (no short/long distinction visible; the short form is not given).
+- Verified on hardware (SPD4323X, fw 4.1.2.9R1, 2026-10-05): `MEASure:POWer? CH1` works, `MEAS:POW? CH1` gets no reply (Q7).
 
 **4. Get the running state of the channel**
 - Query: `MEASure[:RUN]:MODE? (CHn)`
@@ -761,6 +804,7 @@ Panel facts: universal setups contain "Independent/series/parallel mode" and "Ou
 - ⚠ manual note: Only `CV` is shown. Panel (8.2.2) describes CV and CC modes; other possible return values (e.g. `CC`, off/idle state) are not documented. `MODE` here is under `MEASure[:RUN]`, unrelated to `[:SOURce]:MODE`.
 
 (The returned voltage/current examples 2.991442 V / 1.999407 A / 19.959515 W are consistent with the 3 V / 2 A setting examples; values are plain numbers with no unit suffix.)
+- Verified on hardware (SPD4323X, fw 4.1.2.9R1, 2026-10-05): answers `CV` with the output off; `MEASure:MODE? CH1` (optional `[:RUN]` omitted) works too. `CC` has not been observed (Q4, Q7).
 
 ---
 
@@ -783,6 +827,7 @@ Table copied from the manual (columns in manual order; the PDF image was checked
 ⚠ manual note: SPD4306X CH4 is printed `15/1` while CH1 of the same model is `15/1.5` (and CH4 of SPD4121X is 15/1.5). Possibly a typo; verify on hardware (`CURRent:SET? CH4` with `MAXimum`, or panel).
 ⚠ manual note: The intro text says rated output voltages "32V, 12V, or 30V" and powers "240W, 285W or 400W". CH1/CH4 of the models (6 V, 15 V) are not covered by that sentence.
 ⚠ manual note: Model/channel pairing of the 240/285/400 W figures follows the table column order.
+- Verified on hardware (SPD4323X, fw 4.1.2.9R1, 2026-10-05): on the SPD4323X `VOLTage? CHn,MAX` answers `6.060000` (CH1, CH4) and `32.320000` (CH2, CH3), `CURRent? CHn,MAX` answers `3.232000` on all four channels: 1.01 x the rated values above. SPD4306X CH4 was not testable (docs/hardware_findings.md Q14).
 
 Series/parallel (8.2.2):
 - Only CH2 and CH3 have three output modes: independent, parallel, series. CH1/CH4 only have independent mode.
@@ -804,6 +849,7 @@ Commands (all in SOURCE subsystem, section 5.2):
 - Panel semantics: OVP range 0.1~1.1 x rated voltage; OCP range 0.1~1.1 x rated current; OCP delay 0-3600 s, 0.01 s resolution, output turns off if OCP still triggered after the delay, delay 0 = output off directly when triggered; "The instrument will not trigger the overcurrent protection when the OCP is in OFF state." After the default-settings operation: OVP and OCP at maximum values, OCP state off, OCP delay 0.
 - Other stated limits: "Do not load the voltage at the output terminals more than 10% of the rated voltage, otherwise the internal components of the instrument will be damaged." (8.1.2); output terminal to ground withstand "± 240VDC" (8.2.2); in 4W sense mode, an unreliable output wire connection leads to an "internal short-circuit current limiting protection state. At this time, it is necessary to manually turn off the output and check the wiring"; if sense wires are not reliably connected "the actual output voltage will be higher" (8.5).
 - Output ON/OFF delay: 0-3600 s (7.2).
+- Verified on hardware (SPD4323X, fw 4.1.2.9R1, 2026-10-05): OVP/OCP defaults and maxima are 1.1 x the rating, the minimum 0.1 x (clamped silently); the OCP delay clamps to 0..3600 s with no 0.01 s rounding (docs/hardware_findings.md Q9, Q14). Protection trips, `RESET:PROTect` and what `OUTPut?` reads while tripped were not tested (no output was switched on).
 - List: repeat count max 9999; wave duration max 999h 59m 59s; sample period 200-6000 ms.
 - Constant-voltage / constant-current behavior: if the load impedance is greater than set V / set I the unit runs CV, otherwise CC (8.2.2). `MEASure:RUN:MODE?` returns `CV` in the example.
 
@@ -811,22 +857,27 @@ Commands (all in SOURCE subsystem, section 5.2):
 
 ## 8. Open questions for hardware verification
 
-1. **Termination**: Which terminator must commands carry on the raw socket (port 5025) and on USB (`\n`? `\r\n`?). The manual shows only `\n` in responses. Does the instrument accept multiple commands per line (`;`)? Not described.
-2. **USB identity**: Is the USB Device port USBTMC? What are VID/PID and the VISA resource string? Manual does not say. Is a driver required beyond NI-VISA?
-3. **LAN**: Does the instrument also expose VXI-11 / VISA `TCPIP::<ip>::INSTR`? Is port 5025 TCP only, single or multiple simultaneous connections? Is the web server on port 80? Telnet?
-4. **Responses**: Do queries ever return units? (Manual examples show plain numbers.) Number formatting: 6 decimals for scalar V/A/s, 3 decimals for list data, integer `1`/`0` for booleans, word `CV`/`Exist`, `0hours,0minutes,30seconds`, `step:1,run_state:0,...`. Do `*ESE?`, `*ESR?`, `*OPC?`, `*SRE?`, `*STB?`, `*TST?` end with `\n` (manual prints none for them)? What does the literal `\s` in `*IDN?` and `LIST:VOLT\s...` look like on the wire (a plain space?). What is the actual `*IDN?` string for each model?
-5. **Missing responses**: Responses not documented for `OCP?`, `LAN:IPADdress?`, `LAN:SMASk?`, `LAN:GATeway?`, `LAN:MAC?`, `GPIB:ADDRess?`, and for `STORage ... FILE:STATe?` when the file does not exist.
-6. **Errors**: There is no error-query command (`SYST:ERR?`) in the manual, though `*CLS` "clear the error list". How are errors reported (e.g. ESR bits, status byte, silent ignore)? What bits of `*ESR?` and `*STB?` are used? What does `*TST?` = 0 mean?
-7. **Case/forms**: Are leading `:`/`[:SOURce]` really optional (examples vary)? Do `OUTP`, `VOLT`, `CURR` short forms work (`OUTP CH1,1`)? Do literal bracketed examples (`WAVE:DRAW[:STATe]`) fail? Is `COUP`/`POWER` accepted in any other form? Is the space between channel and value optional (`CH1, 1` shown with a space in `OCP:STATe`)?
-8. **Channel argument**: Is `CHn` optional (apply to "current channel", per 10.2)? What happens with an invalid channel (e.g. `CH5`)? Is `CH` argument required for `OUTPut:TRACK`/`LOCK`? (They have none.)
-9. **Parameter keywords**: Do `MINimum`/`MAXimum`/`DEFault` work for every command listing them, and what values do they return/set? Rounding/clamping vs error when a value is out of range (e.g. voltage above rating, OVP below set voltage, OCP outside 0.1-1.1 x rated).
-10. **Interaction of OVP/OCP with settings**: Is voltage setting limited by OVP? Is OVP/OCP re-initialized when switching series/parallel? What happens to output state after a trip and after `RESET:PROTect`? Does `OUTPut` return `1` while tripped?
-11. **Timing / settling**: How long after `OUTPut CHn,1` (and with ON-delay) until output is at voltage; is `*OPC?` meaningful for output-on, list run, or delays? Does `*WAI`/`*OPC` actually block? Response time of `MEASure` immediately after output on? Does measurement refresh rate limit polling?
-12. **Remote lock**: Manual says the device auto-locks when remotely controlled: does the panel stay locked after the session ends? Does `LOCK:STATe 0` need to be sent? Does it interfere with `OUTPut`?
-13. **`OUTPut:TRACK` / `MODE` mappings**: numeric values for series (1?) / parallel (2?); `MODE` 0/1 vs 2W/4W; what do the queries return (number vs word) after setting with words. Is `OUTPut:TRACK` rejected while outputs are on?
-14. **Rated table**: SPD4306X CH4 `15/1` (typo for 15/1.5?). Real limits returned by `VOLT? CHn,MAX` / `CURR? CHn,MAX`.
-15. **LIST**: Maximum steps; meaning of list `WAIT` state and `run_state`/`wait_state`/`completed_state` values in `LIST:INFO?`; whether `LIST:RUN` requires output on; meaning of `LIST:CYCLes` = 0 with `CONTinuous`; what unit/valid range for `LIST:TIME` values (seconds assumed from examples).
-16. **WAVE**: Behavior of `WAVE:DRAW:ALL` (voltage only per description?), parameter order of `WAVE:SAVE:TIME`, relation of `WAVE:SAVE:STATe` to the U-disk.
-17. **STORAGE**: Does the file number accept 1-8? Does SCPI storage use the internal or the U-disk storage? Query values other than `Exist`.
-18. **`*RST`**: What state does it leave (outputs off? values 0?) - not defined in the manual.
-19. **Programming examples** referenced by the manual (10.1) are not included; any VISA/Socket sample code must be validated on hardware.
+Status after the first hardware acceptance run (2026-10-05, SPD4323X, firmware 4.1.2.9R1, raw socket, outputs off) and run 2 (2026-10-04, same unit, plug write path and `tearDown()`, one output switched on with nothing connected; see "Run 2" in hardware_findings.md). The questions are kept as asked; each carries its status and a link to the analysis in `docs/hardware_findings.md`.
+
+1. **Termination**: Which terminator must commands carry on the raw socket (port 5025) and on USB (`\n`? `\r\n`?). The manual shows only `\n` in responses. Does the instrument accept multiple commands per line (`;`)? Not described. **Status (hardware run 2026-10-05, SPD4323X fw 4.1.2.9R1): answered for the raw socket (LF and CRLF accepted, replies end in LF, `;` chains with concatenated replies); USB not tested.** See [hardware_findings.md Q1](hardware_findings.md#q1-termination-several-commands-per-line).
+2. **USB identity**: Is the USB Device port USBTMC? What are VID/PID and the VISA resource string? Manual does not say. Is a driver required beyond NI-VISA? **Status (hardware run 2026-10-05, SPD4323X fw 4.1.2.9R1): not tested (needs a USB connection).** See [hardware_findings.md Q2](hardware_findings.md#q2-usb-identity-vidpid-resource-string-usbtmc).
+3. **LAN**: Does the instrument also expose VXI-11 / VISA `TCPIP::<ip>::INSTR`? Is port 5025 TCP only, single or multiple simultaneous connections? Is the web server on port 80? Telnet? **Status (hardware run 2026-10-05, SPD4323X fw 4.1.2.9R1): partially answered: one socket client at a time; VXI-11, web and telnet not probed.** See [hardware_findings.md Q3](hardware_findings.md#q3-lan-vxi-11-simultaneous-connections-web-telnet).
+4. **Responses**: Do queries ever return units? (Manual examples show plain numbers.) Number formatting: 6 decimals for scalar V/A/s, 3 decimals for list data, integer `1`/`0` for booleans, word `CV`/`Exist`, `0hours,0minutes,30seconds`, `step:1,run_state:0,...`. Do `*ESE?`, `*ESR?`, `*OPC?`, `*SRE?`, `*STB?`, `*TST?` end with `\n` (manual prints none for them)? What does the literal `\s` in `*IDN?` and `LIST:VOLT\s...` look like on the wire (a plain space?). What is the actual `*IDN?` string for each model? **Status (hardware run 2026-10-05, SPD4323X fw 4.1.2.9R1): answered for every query the plug uses (no units, 6 decimals, float32 values, plain-space `*IDN?`).** See [hardware_findings.md Q4](hardware_findings.md#q4-response-formats-units-decimals-s-terminators-idn).
+5. **Missing responses**: Responses not documented for `OCP?`, `LAN:IPADdress?`, `LAN:SMASk?`, `LAN:GATeway?`, `LAN:MAC?`, `GPIB:ADDRess?`, and for `STORage ... FILE:STATe?` when the file does not exist. **Status (hardware run 2026-10-05, SPD4323X fw 4.1.2.9R1): answered for `OCP?` (a plain number); the rest not tested.** See [hardware_findings.md Q5](hardware_findings.md#q5-missing-responses-ocp-lan-gpib-storage).
+6. **Errors**: There is no error-query command (`SYST:ERR?`) in the manual, though `*CLS` "clear the error list". How are errors reported (e.g. ESR bits, status byte, silent ignore)? What bits of `*ESR?` and `*STB?` are used? What does `*TST?` = 0 mean? **Status (hardware run 2026-10-05, SPD4323X fw 4.1.2.9R1): partially answered: no error reply, invalid queries are never answered, `*ESR?` bit 5 is not dependable; `*TST?` not sent.** See [hardware_findings.md Q6](hardware_findings.md#q6-error-reporting-esrstb-tst). **Run 2 (2026-10-04): the "empty error list" explanation does not hold (after `*CLS` three unknown queries set bit 5 each time); `*ESR?` stays unusable.** See [hardware_findings.md run 2 Q6](hardware_findings.md#q6-error-reporting-the-empty-error-list-hypothesis-is-not-supported).
+7. **Case/forms**: Are leading `:`/`[:SOURce]` really optional (examples vary)? Do `OUTP`, `VOLT`, `CURR` short forms work (`OUTP CH1,1`)? Do literal bracketed examples (`WAVE:DRAW[:STATe]`) fail? Is `COUP`/`POWER` accepted in any other form? Is the space between channel and value optional (`CH1, 1` shown with a space in `OCP:STATe`)? **Status (hardware run 2026-10-05, SPD4323X fw 4.1.2.9R1): answered: every optional node and form works; wrong abbreviations and literal brackets get no reply.** See [hardware_findings.md Q7](hardware_findings.md#q7-case-and-forms).
+8. **Channel argument**: Is `CHn` optional (apply to "current channel", per 10.2)? What happens with an invalid channel (e.g. `CH5`)? Is `CH` argument required for `OUTPut:TRACK`/`LOCK`? (They have none.) **Status (hardware run 2026-10-05, SPD4323X fw 4.1.2.9R1): mostly answered: invalid channel in a query gets no reply, `OUTPut:TRACK? CH1` gets no reply, `VOLTage?` answers CH1, `MODE? CH1` answers `0`; effect of an invalid channel in a write on CH4 unknown.** See [hardware_findings.md Q8](hardware_findings.md#q8-channel-argument-optional-invalid-on-outputtracklock). **Run 2 (2026-10-04): `VOLTage CH5,1` and `CH0,1` change none of CH1 to CH4 (CH4 read back); `VOLTage?` without channel answered CH1's value again.** See [hardware_findings.md run 2 Q8](hardware_findings.md#q8-invalid-channel-write-and-ch4-answered). **Addendum (2026-10-04): `VOLTage?` without a channel answers CH1 with CH2 selected on the panel; `MODE? CH4` answers `0`, `MODE CH1|CH4,<x>` is ignored.**
+9. **Parameter keywords**: Do `MINimum`/`MAXimum`/`DEFault` work for every command listing them, and what values do they return/set? Rounding/clamping vs error when a value is out of range (e.g. voltage above rating, OVP below set voltage, OCP outside 0.1-1.1 x rated). **Status (hardware run 2026-10-05, SPD4323X fw 4.1.2.9R1): answered for CH1: values are clamped silently, never rejected; keywords work in set commands and, as query arguments, only for `VOLTage?`/`CURRent?`.** See [hardware_findings.md Q9](hardware_findings.md#q9-minmaxdef-rounding-vs-clamping-vs-error). **Addendum (2026-10-04): the ON/OFF delay writes clamp like `OCP:DELay` (0..3600 s, MIN 0, MAX 3600, DEF 0).**
+10. **Interaction of OVP/OCP with settings**: Is voltage setting limited by OVP? Is OVP/OCP re-initialized when switching series/parallel? What happens to output state after a trip and after `RESET:PROTect`? Does `OUTPut` return `1` while tripped? **Status (hardware run 2026-10-05, SPD4323X fw 4.1.2.9R1): partially answered (outputs off only): no mutual limiting, OVP/OCP not rescaled by the track mode; trips untested.** See [hardware_findings.md Q10](hardware_findings.md#q10-interaction-of-ovpocp-with-other-settings).
+11. **Timing / settling**: How long after `OUTPut CHn,1` (and with ON-delay) until output is at voltage; is `*OPC?` meaningful for output-on, list run, or delays? Does `*WAI`/`*OPC` actually block? Response time of `MEASure` immediately after output on? Does measurement refresh rate limit polling? **Status (hardware run 2026-10-05, SPD4323X fw 4.1.2.9R1): partially answered: a query after a write waits ~250 ms, `*OPC?` adds nothing, `*WAI` accepted; settling after output on untested.** See [hardware_findings.md Q11](hardware_findings.md#q11-timing-settling-opc-wai). **Run 2 (2026-10-04): answered for an unloaded output: the first reading after `OUTPut CH1,1` is already at the setpoint (~295 ms, the write latency); `*OPC?` -> `1` in 2.3 ms.** See [hardware_findings.md run 2 Q11](hardware_findings.md#q11-timing-settling-opc-after-output-on-answered-no-load).
+12. **Remote lock**: Manual says the device auto-locks when remotely controlled: does the panel stay locked after the session ends? Does `LOCK:STATe 0` need to be sent? Does it interfere with `OUTPut`? **Status (hardware run 2026-10-05, SPD4323X fw 4.1.2.9R1): answered at the SCPI level: every remote write locks, `LOCK 0` unlocks; the front panel view was not reported.** See [hardware_findings.md Q12](hardware_findings.md#q12-remote-lock). **Run 2 (2026-10-04): the front panel was seen unlocked after the plug's `tearDown()`.** See [hardware_findings.md run 2 Q12](hardware_findings.md#q12-remote-lock-and-the-plugs-teardown-answered).
+13. **`OUTPut:TRACK` / `MODE` mappings**: numeric values for series (1?) / parallel (2?); `MODE` 0/1 vs 2W/4W; what do the queries return (number vs word) after setting with words. Is `OUTPut:TRACK` rejected while outputs are on? **Status (hardware run 2026-10-05, SPD4323X fw 4.1.2.9R1): answered: queries return numbers (track 0/1/2, sense 0/1); rejection of `OUTPut:TRACK` while an output is on untested; a track change copies CH2 setpoints into CH3.** See [hardware_findings.md Q13](hardware_findings.md#q13-outputtrack-and-mode-mappings).
+14. **Rated table**: SPD4306X CH4 `15/1` (typo for 15/1.5?). Real limits returned by `VOLT? CHn,MAX` / `CURR? CHn,MAX`. **Status (hardware run 2026-10-05, SPD4323X fw 4.1.2.9R1): answered for the SPD4323X (`MAX` = 1.01 x rating, OVP/OCP 0.1 x .. 1.1 x); SPD4306X CH4 untested.** See [hardware_findings.md Q14](hardware_findings.md#q14-rated-table-real-limits-via--chnmax).
+15. **LIST**: Maximum steps; meaning of list `WAIT` state and `run_state`/`wait_state`/`completed_state` values in `LIST:INFO?`; whether `LIST:RUN` requires output on; meaning of `LIST:CYCLes` = 0 with `CONTinuous`; what unit/valid range for `LIST:TIME` values (seconds assumed from examples). **Status (hardware run 2026-10-05, SPD4323X fw 4.1.2.9R1): not tested (out of scope).** See [hardware_findings.md Q15](hardware_findings.md#q15-list-q16-wave-q17-storage).
+16. **WAVE**: Behavior of `WAVE:DRAW:ALL` (voltage only per description?), parameter order of `WAVE:SAVE:TIME`, relation of `WAVE:SAVE:STATe` to the U-disk. **Status (hardware run 2026-10-05, SPD4323X fw 4.1.2.9R1): not tested (out of scope).** See [hardware_findings.md Q15](hardware_findings.md#q15-list-q16-wave-q17-storage).
+17. **STORAGE**: Does the file number accept 1-8? Does SCPI storage use the internal or the U-disk storage? Query values other than `Exist`. **Status (hardware run 2026-10-05, SPD4323X fw 4.1.2.9R1): not tested (out of scope).** See [hardware_findings.md Q15](hardware_findings.md#q15-list-q16-wave-q17-storage).
+18. **`*RST`**: What state does it leave (outputs off? values 0?) - not defined in the manual. **Status (hardware run 2026-10-05, SPD4323X fw 4.1.2.9R1): not tested; `*RST` is never sent.** See [hardware_findings.md Q18](hardware_findings.md#q18-rst).
+19. **Programming examples** referenced by the manual (10.1) are not included; any VISA/Socket sample code must be validated on hardware. **Status (hardware run 2026-10-05, SPD4323X fw 4.1.2.9R1): not applicable: the manual contains no programming examples.** See [hardware_findings.md Q19](hardware_findings.md#q19-programming-examples).
+20. **Channel addressing with optional nodes** (added after code review): section 10.2 says a command without `[:SET]` "will operate on the current channel". Does `VOLTage CH2,5` (no `:SET`) address CH2 or the panel-selected channel? Does `:SOURce:VOLTage:SET CH2,5` always address CH2? Verify by writing a different value to each channel and reading all four back with the full printed form. **Status (hardware run 2026-10-05, SPD4323X fw 4.1.2.9R1): answered: the channel argument is honoured with and without the optional nodes.** See [hardware_findings.md Q20](hardware_findings.md#q20-channel-addressing-with-optional-nodes).
+21. **Series/parallel setpoint meaning** (added after code review): in SERIES mode, is `VOLTage CH2,<v>` the combined voltage (up to 60 V on SPD4323X) or the per-half value? In PARALLEL, is `CURRent CH2,<a>` the combined current? What do `VOLTage? CH2,MAX` / `CURRent? CH2,MAX` return in each mode, and what do CH3 queries return? **Status (hardware run 2026-10-05, SPD4323X fw 4.1.2.9R1): partially answered, read side only: in SERIES `VOLTage? CH2` is the combined voltage, in PARALLEL `CURRent? CH2` the combined current; the write side is untested and the plug refuses CH2/CH3 setpoints in coupled modes.** See [hardware_findings.md Q21](hardware_findings.md#q21-seriesparallel-setpoint-meaning). **Status (hardware run 2, 2026-10-04): answered: a setpoint written to CH2 is the combined value (SERIES `VOLTage CH2,20` -> CH2 `20.000000`, CH3 `10.000000`; PARALLEL `CURRent CH2,5` -> `5.000000` / `2.500000`); the `MAXimum` keyword is per channel; writes to CH3, the current of CH2 in SERIES and the voltage of CH2 in PARALLEL were not tried, so the plug still refuses them.** See [hardware_findings.md run 2 Q21](hardware_findings.md#q21-seriesparallel-setpoint-meaning-write-side-answered). **Addendum (2026-10-04, outputs off): CH3 writes are ignored in both coupled modes; the current of CH2 in SERIES and the voltage of CH2 in PARALLEL are per channel; the combined value is limited to 60 V (SERIES) and 6.464 A (PARALLEL); CH3's current in SERIES reads CH2's + 0.1 A.** See [hardware_findings.md addendum](hardware_findings.md#hardware-findings-spd4323x-run-2-addendum-extra-visit-outputs-off).
+22. **Output OFF delay semantics** (added after code review): after `OUTPut:OFF:DELay CHn,<s>` with s > 0, what does `OUTPut? CHn` return between the `OUTPut CHn,0` command and the actual switch-off? Does `OUTPut:ALL 0` honour per-channel delays? Does setting the delay to 0 while a delayed switch-off is pending switch off immediately? **Status (hardware run 2026-10-05, SPD4323X fw 4.1.2.9R1): not tested (needs an output on).** See [hardware_findings.md Q22](hardware_findings.md#q22-output-off-delay-semantics). **Status (hardware run 2, 2026-10-04): answered: `OUTPut?` keeps answering `1` and the output stays live until the delay elapsed, for `OUTPut CHn,0` and `OUTPut:ALL 0`; writing the delay 0 while pending switches off at once.** See [hardware_findings.md run 2 Q22](hardware_findings.md#q22-output-off-delay-semantics-answered).

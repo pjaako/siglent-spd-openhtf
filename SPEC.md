@@ -123,46 +123,92 @@ CONF.declare('siglent_spd_restore_state', default_value=False,
 Read-back after every set is mandatory. The manual defines no error query, so a
 clamped or ignored value is only detectable by reading it back.
 
+Command-form rule: send every command in the exact form the manual prints in
+its *example* for that command (leading colon, `SOURce` prefix, `:SET` node and
+keyword spelling included). Hardware acceptance (SPD4323X, fw 4.1.2.9R1,
+2026-10-05, raw socket; `docs/hardware_findings.md` Q7/Q20) verified that the
+verbatim forms and the short forms both work and that the channel argument is
+always honoured; the verbatim forms are kept to avoid churn. Where the manual
+prints no example for a form (e.g. a query), derive it from the printed example
+of the paired set form. Never chain commands with `;` (replies are concatenated
+without a separator).
+
+Timing (measured): a query right after a write is held for up to about 330 ms
+until the write is applied; otherwise replies take 1-5 ms. Read-back needs no
+sleep and no `*OPC?`. The 5000 ms timeout stays. An invalid command is never
+answered, so an unknown-header mistake costs one full timeout.
+
 ### Identity and state
 
 | method | SCPI (exactly as written) | returns |
 |---|---|---|
 | `idn()` | `*IDN?` | `Identity`, split on `,`, 4 fields; fewer fields -> `RuntimeError` |
 | `opc()` | `*OPC?` | `str` |
-| `snapshot()` | per channel: `VOLTage? CHn`, `CURRent? CHn`, `OVP? CHn`, `OCP? CHn`, `OCP:STATe? CHn`, `OCP:DELay? CHn`, `OUTPut? CHn`; plus `OUTPut:TRACK?` | `dict` |
-| `restore(snapshot)` | writes back setpoints, OVP, OCP, OCP state, OCP delay and track mode with read-back; **never writes `OUTPut CHn,1`**; collects every failure and raises one `RuntimeError` listing them at the end | `None` |
+| `snapshot()` | per channel: voltage, current, OVP, OCP, OCP state, OCP delay, ON delay, OFF delay, output state; plus track mode | `dict` |
+| `restore(snapshot)` | writes back track mode first (only if it differs), then per channel setpoints, OVP, OCP, OCP state, OCP delay, ON/OFF delays, each read first and written only if it differs (a write costs ~250 ms), with read-back; **never writes `OUTPut CHn,1`**; **skips every channel whose output is currently on** and, if the track restore failed, also CH2 and CH3, naming the skipped channels in the error; collects every failure and raises one `RuntimeError` listing them at the end | `None` |
 
 ### Output
 
 | method | SCPI | notes |
 |---|---|---|
-| `set_voltage(ch, volts)` | `VOLTage CHn,<v>` then `VOLTage? CHn` | `ValueError` if `volts < 0` or above the channel rating when the model is known (see guard rule) |
-| `voltage_setpoint(ch)` | `VOLTage? CHn` | `float` |
-| `set_current(ch, amps)` | `CURRent CHn,<a>` then `CURRent? CHn` | same guard |
-| `current_setpoint(ch)` | `CURRent? CHn` | `float` |
-| `set_output(ch, on: bool)` | `OUTPut CHn,1` / `OUTPut CHn,0` then `OUTPut? CHn` | |
+| `set_voltage(ch, volts)` | `:SOURce:VOLTage:SET CHn,<v>` then `:SOURce:VOLTage:SET? CHn` | `ValueError` if `volts < 0` or above the channel rating when the model is known (see guard rule) |
+| `voltage_setpoint(ch)` | `:SOURce:VOLTage:SET? CHn` | `float` |
+| `set_current(ch, amps)` | `:SOURce:CURRent:SET CHn,<a>` then `:SOURce:CURRent:SET? CHn` | same guard |
+| `current_setpoint(ch)` | `:SOURce:CURRent:SET? CHn` | `float` |
+| `set_output(ch, on: bool)` | `OUTPut CHn,1` / `OUTPut CHn,0` then `OUTPut? CHn` | `on` must be a `bool` (or the ints 0/1); any other type or value raises `ValueError` before anything is sent. Same for every other boolean setter. |
 | `output(ch)` | `OUTPut? CHn` | `bool` from `0`/`1` |
 | `set_all_outputs(on)` | `OUTPut:ALL 1` / `OUTPut:ALL 0` then `OUTPut? CHn` for every channel | verification is per channel: the all-channel query format is undocumented |
 | `all_outputs_off()` | `set_all_outputs(False)` | |
 | `set_output_delay(ch, on_s=None, off_s=None)` | `OUTPut:ON:DELay CHn,<s>` / `OUTPut:OFF:DELay CHn,<s>` with read-back | 0..3600 else `ValueError` |
 | `configure_channel(ch, *, voltage=None, current=None, ovp=None, ocp=None, ocp_enabled=None, ocp_delay=None)` | the corresponding setters, in this order: ovp, ocp, ocp_delay, ocp_enabled, voltage, current | attempts all items, raises one `RuntimeError` listing every failure |
 
-Guard rule: when `self.model` is known and the channel is CH1 or CH4, or the
-track mode last read is INDEPENDENT, the setter rejects values above the
-independent rating with `ValueError` before anything is sent. For CH2/CH3 in
-series or parallel mode use the series/parallel rating. The plug caches the
-track mode from `track()`/`set_track()` and reads it once lazily when needed.
+Guard rule: when `self.model` is known, `set_voltage`/`set_current` reject
+values above the channel's **rated** value with `ValueError` before anything is
+sent. The instrument itself accepts up to 1.01 x rating (`VOLTage? CHn,MAX`)
+and clamps silently beyond; that 1 % is headroom, not a specification, so the
+guard stays at the rating. The one exception is the combined CH2 write of
+the coupled modes (see below), whose guard is the model's series/parallel rating.
+The plug caches the track mode from
+`track()`/`set_track()` and reads it once lazily when needed.
+
+Coupled modes (open question 21, verified on SPD4323X, firmware 4.1.2.9R1,
+2026-10-04, `docs/hardware_findings.md` run 2): a setpoint written to CH2 is the
+**combined** value (SERIES: `VOLTage CH2,20` reads back 20 on CH2 and 10 on
+CH3; PARALLEL: `CURRent CH2,5` reads back 5 on CH2 and 2.5 on CH3). While the
+track mode is SERIES or PARALLEL the plug allows every voltage/current setpoint
+write on **CH2**, with the usual read-back: the **voltage in SERIES** and the
+**current in PARALLEL** are the combined value (guard: the model's `series.voltage`
+resp. `parallel.current` rating; the instrument itself limits them to 60 V resp.
+6.464 A), the **current in SERIES** and the **voltage in PARALLEL** are per
+channel (guard: the channel rating; in SERIES CH3 shows CH2's current + 0.1 A, in
+PARALLEL CH3 takes the voltage too). A voltage or current written to **CH3** in
+a coupled mode is ignored by the instrument (CH3 follows CH2), so `set_voltage`,
+`set_current` and `configure_channel` raise `RuntimeError` before anything is
+sent. `configure_channel` checks its `voltage`/`current` items up front; OVP/OCP
+items are not affected. `restore()` writes CH2 (both quantities) and leaves CH3
+to follow (a CH3 item is reported only if it still differs afterwards), and
+leaves CH2 alone while CH3's output is on. The CH2 writes are allowed only when
+`self.model` is known and `tested` (an unknown or untested model may behave
+differently), and the track mode is read
+fresh from the instrument (`OUTPut:TRACK?`, about 4 ms) before every CH2/CH3
+voltage or current write, because the cached mode can be stale (panel, second
+client); CH1 and CH4 setters never query it.
+The `MAXimum` keyword stays per channel (32.32 V, 3.232 A) in a coupled mode.
+Not yet tried (open): the other quantity of CH2 above the per-channel `MAX`.
+
+`max_voltage(ch)` / `max_current(ch)` query `:SOURce:VOLTage:SET? CHn,MAXimum` /
+`:SOURce:CURRent:SET? CHn,MAXimum` (verified) and return the float.
 
 ### Protection
 
 | method | SCPI | notes |
 |---|---|---|
-| `set_ovp(ch, volts)` / `ovp(ch)` | `OVP CHn,<v>` with `OVP? CHn` | |
-| `set_ocp(ch, amps)` / `ocp(ch)` | `OCP CHn,<a>` with `OCP? CHn` | |
-| `set_ocp_enabled(ch, on)` / `ocp_enabled(ch)` | `OCP:STATe CHn,1|0` with `OCP:STATe? CHn` | |
+| `set_ovp(ch, volts)` / `ovp(ch)` | `:SOURce:OVP CHn,<v>` with `:SOURce:OVP? CHn` | |
+| `set_ocp(ch, amps)` / `ocp(ch)` | `:SOURce:OCP CHn,<a>` with `:SOURce:OCP? CHn` | |
+| `set_ocp_enabled(ch, on)` / `ocp_enabled(ch)` | `:SOURce:OCP:STATe CHn,1|0` with `:SOURce:OCP:STATe? CHn` | the manual example has a space after the comma (`CH1, 1`); send without the space, mark `# ASSUMPTION(hw): no space` |
 | `set_ocp_delay(ch, s)` / `ocp_delay(ch)` | `OCP:DELay CHn,<s>` with `OCP:DELay? CHn` | 0..3600 |
-| `protection_status(ch)` | `OVP:PROTect:STATe? CHn`, `OCP:PROTect:STATe? CHn` | `ProtectionStatus`; `1` = tripped `# ASSUMPTION(hw)` |
-| `clear_protection(ch)` | `RESET:PROTect CHn` | no read-back possible; afterwards query `protection_status` and raise `RuntimeError` if still tripped |
+| `protection_status(ch)` | `:SOURce:OVP:PROTect:STATe? CHn`, `:SOURce:OCP:PROTect:STATe? CHn` | `ProtectionStatus`; `1` = tripped `# ASSUMPTION(hw)` (untripped reads `0`, verified; a trip not yet provoked) |
+| `clear_protection(ch)` | `:SOURce:RESET:PROTect CHn` | no read-back possible; afterwards query `protection_status` and raise `RuntimeError` if still tripped |
 
 There is no OVP enable command in the manual; do not invent one.
 
@@ -181,23 +227,31 @@ There is no OVP enable command in the manual; do not invent one.
 
 | method | SCPI | notes |
 |---|---|---|
-| `set_track(mode: TrackMode)` | `OUTPut:TRACK <WORD>` (send the word, not the number) then `OUTPut:TRACK?` | the query returns a number; map `0`->INDEPENDENT, `1`->SERIES, `2`->PARALLEL `# ASSUMPTION(hw): track numbering`; also accept the words. Raise `RuntimeError` if any of CH2/CH3 output is on (query first). |
+| `set_track(mode: TrackMode)` | `OUTPut:TRACK <WORD>` (send the word, not the number) then `OUTPut:TRACK?` | the query returns a number; `0`->INDEPENDENT, `1`->SERIES, `2`->PARALLEL (verified); also accept the words. Raise `RuntimeError` if any of CH2/CH3 output is on (query first). Entering SERIES or PARALLEL copies CH2's voltage and current setpoints into CH3, and CH3 keeps them after returning to INDEPENDENT (verified): read CH3 voltage/current before and after and `logger.warning` naming both values when they changed. |
 | `track()` | `OUTPut:TRACK?` | `TrackMode` |
-| `set_sense(ch, mode: SenseMode)` | `MODE CHn,2W|4W` then `MODE? CHn` | CH2/CH3 only else `ValueError`; query returns a number; map `0`->2W, `1`->4W `# ASSUMPTION(hw): sense numbering`; also accept words |
+| `set_sense(ch, mode: SenseMode)` | `MODE CHn,2W|4W` then `MODE? CHn` | CH2/CH3 only else `ValueError` (the `0` that `MODE? CH1` returns on hardware means nothing); query returns a number; `0`->2W, `1`->4W (verified); also accept words |
 | `sense(ch)` | `MODE? CHn` | `SenseMode` |
 
 ### Lock and teardown
 
 | method | SCPI |
 |---|---|
-| `set_lock(on)` / `locked()` | `LOCK 1|0` with `LOCK?` |
+| `set_lock(on)` / `locked()` | `:SOURce:LOCK:STATe ON|OFF` with `:SOURce:LOCK:STATe?` |
 | `tearDown()` | see below |
 
 `tearDown()`:
-1. If `outputs_off_on_teardown`: `all_outputs_off()`.
+1. If `outputs_off_on_teardown`: for every channel whose output is on, query the
+   OFF delay and, if it is not 0, write `OUTPut:OFF:DELay CHn,0` with read-back
+   and log a warning (a delayed switch-off would leave the DUT powered after the
+   test ends). Then `all_outputs_off()`; if `OUTPut:ALL 0` fails, fall back to
+   `OUTPut CHn,0` per channel. If this step failed with a transport error, skip
+   step 2 (each restore write would wait for its own timeout).
+   (Verified, run 2: `OUTPut:ALL 0` honours a pending OFF delay, so zeroing it
+   first is necessary, and writing the delay 0 switches a pending output off at
+   once.)
 2. If `restore_state` and a snapshot exists: `restore(snapshot)`.
-3. `set_lock(False)` (the panel locks itself under remote control; hand the
-   front panel back). `# ASSUMPTION(hw): needed`.
+3. `set_lock(False)`: any remote write sets `LOCK` to 1 (verified), so this must
+   stay the **last** write of the session; nothing may be written after it.
 4. Each of the steps above is wrapped so that a failure is logged with
    `self.logger.warning` and never prevents the next step or `resource.close()`.
 5. Close the resource, and the ResourceManager if the plug created it.
@@ -217,9 +271,10 @@ No `pyvisa` import. Constructor:
 - Per-channel state: `voltage`, `current`, `ovp`, `ocp`, `ocp_enabled`,
   `ocp_delay`, `output`, `on_delay`, `off_delay`, `ovp_tripped`, `ocp_tripped`.
   Instrument state: `track` (0/1/2), `sense` for CH2/CH3 (0/1), `lock`.
-  Initial values follow the manual's "Default Settings" (section 4 of the
-  reference): V and I 0, OVP and OCP at the rated maximum, OCP off, delay 0,
-  outputs off, track 0, sense 0, lock 0.
+  Initial values as observed on hardware: V and I 0, OVP = 1.1 x rated voltage
+  and OCP = 1.1 x rated current on every channel, OCP off, delays 0, outputs
+  off, track 0, sense 0, lock 0. Every scalar is stored as float32 and answered
+  as `f'{x:.6f}'` of that value (`OVP? CH2` -> `35.200001`).
 - Parsing: strip the optional leading `:` and optional `SOURce:`/`SOUR:`
   prefix, accept long and short forms of every keyword used by the plug
   (`VOLTage`/`VOLT`, `CURRent`/`CURR`, `OUTPut`/`OUTP`, `MEASure`/`MEAS`,
@@ -233,19 +288,52 @@ No `pyvisa` import. Constructor:
   `'1'`/`'0'`, `OUTPut:TRACK?` and `MODE?` return the number, `MEASure:RUN:MODE?`
   returns `CV` or `CC`, `*IDN?` returns `Siglent Technologies,<model>,<serial>,<firmware>`,
   `*OPC?` returns `1`.
-- Setting a voltage/current/OVP/OCP above the rating of the channel (per
-  `models.py`, honoring track mode for CH2/CH3) **clamps to the rating**
-  (`# ASSUMPTION(hw): clamping`), negative values clamp to 0, so that a plug
-  without read-back verification would silently pass.
+- Clamping as observed: voltage/current clamp to **1.01 x rating** (`MAX`,
+  e.g. 6.060000 / 32.320000 / 3.232000 on the SPD4323X) and to 0 below; OVP/OCP
+  clamp to 0.1 x .. 1.1 x rating; OCP delay clamps to 0..3600 s; ON/OFF delays
+  the same (verified). Nothing is ever reported, so
+  a plug without read-back verification would silently pass. `MINimum`/`MAXimum`/
+  `DEFault` (and `MIN`/`MAX`/`DEF`) work in set commands for V, I, OVP, OCP and
+  delays (DEFault = 0 for V/I/delays, 1.1 x rating for OVP/OCP) and as query
+  arguments only for `VOLTage?`/`CURRent?` (any keyword on `OVP?`, `OCP?` or the
+  delay queries gets no answer). `MAX` is per channel and ignores the track mode.
+- Every accepted write other than the lock command sets `lock = 1` (queries
+  never do); `LOCK 0` clears it.
+- Status: `*ESR?` returns 32 after an unknown header or an unanswered query,
+  clears on read; `*CLS` clears; `*STB?`, `*ESE?`, `*SRE?` answer `0`; `*OPC`
+  sets bit 0; invalid channel, non-numeric value and clamping set nothing.
+- `;` chaining: split, execute in order, answer the query replies concatenated
+  without separator.
+- A query that takes no channel but gets one (`OUTPut:TRACK? CH1`) gets no
+  answer; a channel query without channel (`VOLTage?`) answers CH1
+  (verified: CH1, also with CH2 selected on the panel).
+- Track change: entering SERIES/PARALLEL copies CH2's voltage and current
+  setpoints to CH3 (kept after INDEPENDENT); store per-half values; in SERIES
+  `VOLT? CH2` answers 2 x, in PARALLEL `CURR? CH2` answers 2 x; CH3 answers its
+  own stored value; OVP/OCP are not changed by a track change. A write to CH2's
+  combined quantity (voltage in SERIES, current in PARALLEL) is the combined
+  value (verified): each half stores half of it and **CH3 follows CH2**; the
+  `MAXimum`/`MINimum`/`DEFault` keywords are per channel and used as the combined
+  value (32.32 V resp. 3.232 A for MAXimum, verified); a numeric value is
+  limited to the series rating (60 V) in SERIES and to 2 x MAX (6.464 A) in
+  PARALLEL (verified). The other quantity of CH2 is per channel (the voltage in
+  PARALLEL also lands on CH3; CH3's current in SERIES reads CH2's + 0.1 A, nothing
+  stored), clamped at the per-channel maximum (`# ASSUMPTION(hw)`: not tried
+  above it). Voltage and current writes to CH3 in a coupled mode are ignored.
+- OFF delay (verified, run 2, Q22): switching an output off with a non-zero OFF
+  delay, by `OUTPut CHn,0` or `OUTPut:ALL 0`, keeps it on (`OUTPut?` answers 1,
+  measurements unchanged) until the delay has elapsed (`advance()`); writing the
+  OFF delay 0 while the switch-off is pending switches the output off at once.
 - `loads`: `dict[int, float | None]` ohms per channel, default `None` = open
   circuit. Measurement model when output is on: open circuit -> V = setpoint,
   I = 0, mode CV; with load R: I = V/R; if I > current setpoint then CC with
   I = Iset and V = Iset*R. Output off -> V = 0, I = 0. P = V*I. If OCP is
-  enabled and I >= OCP value, set `ocp_tripped` and turn the output off
+  enabled and I >= OCP value (including OCP value 0 with I = 0), set `ocp_tripped` and turn the output off
   (ignore the delay). If measured V > OVP, set `ovp_tripped` and turn the
   output off. `RESET:PROTect` clears both flags.
 - `OUTPut:TRACK <x>` accepts `0|1|2|INDEPENDENT|SERIES|PARALLEL`.
-  `MODE CH2|CH3,<0|1|2W|4W>`; `MODE CH1,...` is ignored and `MODE? CH1` times out.
+  `MODE CH2|CH3,<0|1|2W|4W>`; `MODE? CH1` and `MODE? CH4` answer `0`
+  (observed) and `MODE CH1|CH4,<x>` is ignored (verified, run 2 addendum).
 - `reject: dict[str, str]`: header prefix -> if a write starts with it, ignore
   the write (state unchanged) so read-back verification catches it.
 - Helpers for tests: `set_load(ch, ohms)`, `trip_ovp(ch)`, `trip_ocp(ch)`.
@@ -279,11 +367,16 @@ PASS, 1 otherwise.
 
 ## 7. README.md
 
-Usage snippet first (10 lines), then: supported models table with a clear
-"tested only on SPD4323X" statement, install (`uv venv` + `uv pip install -e .[dev]`),
+Usage snippet first (10 lines), then: supported models table stating that the
+SPD4323X is the target and the only tested model ("tested over LAN (raw
+socket), firmware 4.1.2.9R1" since `docs/acceptance.md` has been run; the other
+two models "not started"), never stating an unverified transport or behaviour
+as fact (USBTMC and VXI-11 are unverified; the raw socket on port 5025 and the
+unlock step are verified), install (`uv venv` + `uv pip install -e .[dev]`),
 transport/resource-name examples with RFC 5737 addresses (`192.0.2.10`),
 teardown policy and CONF keys, running tests and `--fake`, a "Things the manual
-does not tell you" section that is empty until hardware acceptance fills it,
+does not tell you" section filled from the acceptance findings (dated, with
+the raw reply),
 links to `docs/scpi_reference.md`, `SPEC.md`, `AGENTS.md`, licence.
 
 ## Done means
@@ -294,5 +387,13 @@ links to `docs/scpi_reference.md`, `SPEC.md`, `AGENTS.md`, licence.
   (`grep` each one; a reviewer will).
 - Every `# ASSUMPTION(hw)` in the spec is present in the source at the place
   where the assumption is made.
+- CI runs on every Python version the README claims (3.11 and 3.13).
+- `HANDOFF.md` updated.
+- The fake reproduces every reply quoted in `docs/hardware_findings.md` for the
+  commands the plug uses.
+- `models.tested` is `True` for the SPD4323X only (experiments 21, the plug write
+  smoke, and 30, output on, both passed on 2026-10-04); the README model table
+  says "tested over LAN (raw socket), firmware 4.1.2.9R1". It stays `False` for
+  the SPD4121X and SPD4306X.
 - README written as in section 7.
 - No real VISA resource was opened.
