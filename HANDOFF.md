@@ -46,3 +46,58 @@ Status for a cold agent. Keep this current at every commit.
 ## Out of scope for now
 - LIST, WAVE, STORAGE, CALIBRATE subsystems (phase 2 candidates: LIST).
 
+
+## Prompt for the local agent (hardware acceptance run 2)
+
+The cloud session cannot reach the instrument (raw TCP is blocked). The user
+starts Claude Code in a local clone on the supply's LAN and pastes this:
+
+```text
+You are taking over the siglent-spd-openhtf project for hardware acceptance run 2. You are the
+project-owner agent for this session: you may use the real power supply, with me present. Read
+CLAUDE.md, AGENTS.md, HANDOFF.md, SPEC.md, docs/acceptance.md (section 7 is the plan) and
+docs/hardware_findings.md (run 1) before anything else. Work on branch claude/stoic-cannon-bltu6t
+(git pull first; never push to another branch).
+
+Setup: uv venv --python 3.13 .venv && uv pip install --python .venv/bin/python -e '.[dev]' ;
+run .venv/bin/python -m pytest -q and confirm 323 tests pass before touching hardware. Ask me
+for the supply's IP and export PSU_HOST. Confirm with me that all outputs are off and nothing is
+connected to any output terminal before each hardware step; stop and ask if anything is unclear.
+
+Hardware steps, in this order, exactly as docs/acceptance.md section 7 describes:
+(a) .venv/bin/python tools/hw_acceptance.py --report run2.local.md   (outputs off)
+(b) only if (a) finished with a clean restore and after I confirm again that nothing is
+    connected: .venv/bin/python tools/hw_acceptance.py --only 30,31 --allow-output
+    --confirm-no-load --report run2_output.local.md
+(c) ask me to look at the front panel: is it unlocked? is CH4 still 0 V / 0 A? did CH3 return to
+    its original setpoints? Record my answers.
+Never send *RST, DEFault:RESET, FACTory:RESET, LAN/GPIB/STORage/CALibrate/WAVE/LIST commands;
+never turn an output on outside experiments 30/31; never edit the tool's SafetyPolicy to get past
+a refusal. Reports and logs are *.local.* files and stay out of git.
+
+Then analyse: read hw_acceptance.local.log and both reports line by line and add a "Run 2"
+section to docs/hardware_findings.md with the same structure as run 1 (answers per open
+question with quoted command -> raw reply evidence; verdict per remaining ASSUMPTION(hw) marker;
+required code changes). Use 192.0.2.10 for the IP and SPD43XXXXXXXXX for the serial in anything
+committed.
+
+Then fold the findings into the code and docs, following AGENTS.md: resolve every ASSUMPTION(hw)
+marker the run answered (plug and fake alike, replace by a "verified on SPD4323X, firmware
+4.1.2.9R1, <date>" comment), fix the fake so it reproduces the observed replies, add tests for
+each new behaviour, update README "Things the manual does not tell you", annotate
+docs/scpi_reference.md, amend SPEC.md where the contract changes (in particular: lift or keep the
+coupled-mode refusal for CH2/CH3 setpoints depending on what question 21's write side showed;
+OFF-delay handling in tearDown depending on question 22). Set models.tested=True for the
+SPD4323X only if experiments 21 and 30 both passed, and change the README model table to
+"tested over LAN (raw socket), firmware 4.1.2.9R1". Keep all AGENTS.md safety rules: read-back on
+every setter, no output on in tearDown/restore, outputs off by default. You may delegate coding
+to subagents and review with a stronger one if your setup allows; otherwise do it yourself.
+
+Done means: .venv/bin/ruff check src tests example_test.py tools, .venv/bin/ruff format --check
+on the same, .venv/bin/mypy src and .venv/bin/python -m pytest -q all pass; python
+example_test.py --fake exits 0; HANDOFF.md updated (run 2 done, what is still open: USB
+identity, a real protection trip, other models); commit in logical steps with descriptive
+messages, each ending with your own Co-Authored-By trailer; git push -u origin
+claude/stoic-cannon-bltu6t. Finish with a short summary for me: what the hardware showed, what
+changed, what is still open.
+```

@@ -1,0 +1,1 @@
+Read `AGENTS.md` (behaviour protocol) and `HANDOFF.md` (current status) before doing anything in this repository. `SPEC.md` is the contract; `docs/scpi_reference.md` is the only source of SCPI commands.
